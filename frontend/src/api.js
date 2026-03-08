@@ -39,9 +39,32 @@ export async function health() {
   return request('/health')
 }
 
-export async function runScan(payload) {
+export async function startScan(payload) {
   return request('/scan', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export async function getScanJob(jobId) {
+  return request(`/scan/${jobId}`)
+}
+
+export function streamScanJob(jobId, onEvent, onDone, onError) {
+  const url = `${API_BASE}/scan/${jobId}/stream`
+  const es = new EventSource(url)
+  es.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data)
+      onEvent(data)
+      if (data.type === 'done') { es.close(); onDone?.() }
+    } catch { /* ignore */ }
+  }
+  es.onerror = (e) => { es.close(); onError?.(e) }
+  return es
+}
+
+// Geo/ASN lookup — proxied through FastAPI backend to avoid ip-api.com CORS issues
+export async function fetchIpInfo(ip) {
+  return request(`/ip/${encodeURIComponent(ip)}`)
 }

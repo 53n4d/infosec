@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 from pydantic import BaseModel, Field
 
@@ -43,16 +43,30 @@ class ScanRequest(BaseModel):
     ports: List[int]
     all_ports: bool = False
     run_cve: bool = False
+    masscan_rate: int = 1000
 
 
 class ScanHit(BaseModel):
     range: str
     ip: str
+    port: int
     status: str
-    ports: List[int]
-    cves: List[str] = []
+    banner: Optional[str] = None
+    software: Optional[str] = None
+    version_info: List[Dict[str, str]] = []
+    cves: List[Dict[str, Any]] = []
 
 
 class ScanResponse(BaseModel):
     job_id: str
     hits: List[ScanHit]
+
+
+class JobStatus(BaseModel):
+    job_id: str
+    status: str  # "running" | "done" | "error"
+    probed: int
+    responsive: int
+    vuln_hosts: int
+    hits: List[ScanHit]
+    error: Optional[str] = None
