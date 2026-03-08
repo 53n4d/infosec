@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { useLocation } from 'react-router-dom'
-import { startScan, streamScanJob } from '../api'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { startScan, streamScanJob, contributeIntel } from '../api'
 
 const PRESET_PORTS = [21, 22, 23, 25, 80, 443, 445, 3306, 3389, 5432, 6379, 8080, 8443, 9200, 27017]
 
@@ -77,44 +77,115 @@ function severityColor(score) {
 }
 
 export default function ScanConsole() {
-  const location = useLocation()
-  const [ranges, setRanges] = useState('')
+  const location  = useLocation()
+  const navigate  = useNavigate()
+  const { jobId: urlJobId } = useParams()
 
-  // Populate ranges whenever we navigate here with state from RangeLookup
-  useEffect(() => {
-    if (location.state?.ranges) {
-      setRanges(location.state.ranges)
-      // Clear the state so a manual refresh doesn't re-populate
-      window.history.replaceState({}, '')
-    }
-  }, [location.state])
-
-  // Port mode
-  const [portMode, setPortMode] = useState('preset')
-  const [customPorts, setCustomPorts] = useState([])   // array of port numbers
-  const [portSearch, setPortSearch] = useState('')
-  const [portDropOpen, setPortDropOpen] = useState(false)
+  const [ranges,      setRanges]      = useState('')
+  const [portMode,    setPortMode]    = useState('preset')
+  const [customPorts, setCustomPorts] = useState([])
+  const [portSearch,  setPortSearch]  = useState('')
+  const [portDropOpen,setPortDropOpen]= useState(false)
   const portDropRef = useRef(null)
 
-  const [runCve, setRunCve] = useState(true)
-  const [masscanRate, setMasscanRate] = useState(1000)
+  const [runCve,       setRunCve]       = useState(true)
+  const [masscanRate,  setMasscanRate]  = useState(1000)
 
-  const [jobId, setJobId] = useState(null)
-  const [jobStatus, setJobStatus] = useState(null)
-  const [stats, setStats] = useState({ probed: 0, responsive: 0, vuln_hosts: 0 })
-  const [hits, setHits] = useState([])
-  const [error, setError] = useState('')
-  const [activeHit, setActiveHit] = useState(null)
+  const [jobId,      setJobId]      = useState(urlJobId || null)
+  const [jobStatus,  setJobStatus]  = useState(null)
+  const [stats,      setStats]      = useState({ probed: 0, responsive: 0, vuln_hosts: 0 })
+  const [hits,       setHits]       = useState([])
+  const [error,      setError]      = useState('')
+  const [activeHit,  setActiveHit]  = useState(null)
 
-  const esRef = useRef(null)
+  // Intel banner — shown when data was loaded from community intel
+  const [intelBanner, setIntelBanner] = useState(null)
+
+  const esRef  = useRef(null)
   const logRef = useRef(null)
 
-  // Close port dropdown on outside click
+  // ── Populate from navigation state (RangeLookup / ScanDashboard) ──────
+  useEffect(() => {
+    if (!location.state) return
+    const { ranges: r, intelHits, intelCountry, autoStart } = location.state
+
+    if (r) setRanges(r)
+
+    if (intelHits && intelHits.length > 0) {
+      // Pre-load intel hits as read-only results
+      setHits(intelHits)
+      setStats({
+        probed: location.state.intelStats?.probed || 0,
+        responsive: intelHits.length,
+        vuln_hosts: intelHits.filter((h) => h.cves?.length > 0).length,
+      })
+      setJobStatus('intel')
+      setIntelBanner({
+        country: intelCountry,
+        age_days: location.state.age_days || 0,
+      })
+    }
+
+    window.history.replaceState({}, '')
+  }, [location.state])
+
+  // ── Reconnect to existing job from URL ────────────────────────────────
+  useEffect(() => {
+    if (!urlJobId) return
+
+    try {
+      const saved = JSON.parse(localStorage.getItem('scan_' + urlJobId) || '{}')
+      if (saved.rangesText) setRanges(saved.rangesText)
+    } catch { /* ignore */ }
+
+    setJobId(urlJobId)
+    setJobStatus('running')
+    setHits([])
+    setStats({ probed: 0, responsive: 0, vuln_hosts: 0 })
+    setIntelBanner(null)
+    esRef.current?.close()
+
+    esRef.current = streamScanJob(
+      urlJobId,
+      (event) => {
+        if (event.type === 'hit') {
+          setHits((prev) => [...prev, event.hit])
+        } else if (event.type === 'stats') {
+          const s = { probed: event.probed, responsive: event.responsive, vuln_hosts: event.vuln_hosts }
+          setStats(s)
+          setJobStatus(event.status)
+          const existing = JSON.parse(localStorage.getItem('scan_' + urlJobId) || '{}')
+          localStorage.setItem('scan_' + urlJobId, JSON.stringify({
+            ...existing,
+            status: event.status,
+            probed: event.probed,
+            open: event.responsive,
+            vulns: event.vuln_hosts,
+          }))
+        }
+      },
+      () => {
+        setJobStatus('done')
+        const existing = JSON.parse(localStorage.getItem('scan_' + urlJobId) || '{}')
+        const updated = { ...existing, status: 'done' }
+        localStorage.setItem('scan_' + urlJobId, JSON.stringify(updated))
+        // Contribute to community intel when scan finishes
+        _contributeIfPossible(urlJobId, updated)
+      },
+      () => {
+        setJobStatus('error')
+        const existing = JSON.parse(localStorage.getItem('scan_' + urlJobId) || '{}')
+        localStorage.setItem('scan_' + urlJobId, JSON.stringify({ ...existing, status: 'error' }))
+      },
+    )
+    return () => esRef.current?.close()
+  }, [urlJobId])
+
+  // ── Close port dropdown on outside click ──────────────────────────────
   useEffect(() => {
     const handler = (e) => {
-      if (portDropRef.current && !portDropRef.current.contains(e.target)) {
+      if (portDropRef.current && !portDropRef.current.contains(e.target))
         setPortDropOpen(false)
-      }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -127,7 +198,6 @@ export default function ScanConsole() {
   useEffect(() => { scrollLog() }, [hits, scrollLog])
   useEffect(() => () => esRef.current?.close(), [])
 
-  // Filtered port list for dropdown
   const filteredPortList = useMemo(() => {
     const term = portSearch.toLowerCase().trim()
     if (!term) return ALL_PORTS
@@ -136,19 +206,17 @@ export default function ScanConsole() {
     )
   }, [portSearch])
 
-  const toggleCustomPort = (port) => {
+  const toggleCustomPort = (port) =>
     setCustomPorts((prev) =>
       prev.includes(port) ? prev.filter((p) => p !== port) : [...prev, port].sort((a, b) => a - b)
     )
-  }
 
   const removeCustomPort = (port) => setCustomPorts((prev) => prev.filter((p) => p !== port))
 
   const addCustomPortByInput = (val) => {
     const n = parseInt(val, 10)
-    if (n > 0 && n <= 65535 && !customPorts.includes(n)) {
+    if (n > 0 && n <= 65535 && !customPorts.includes(n))
       setCustomPorts((prev) => [...prev, n].sort((a, b) => a - b))
-    }
     setPortSearch('')
   }
 
@@ -160,11 +228,38 @@ export default function ScanConsole() {
   }
 
   const finalPorts = () => {
-    if (portMode === 'all') return []
+    if (portMode === 'all')    return []
     if (portMode === 'preset') return PRESET_PORTS
     return customPorts
   }
 
+  // ── Contribute finished scan to Firestore intel ────────────────────────
+  const _contributeIfPossible = (jid, savedMeta) => {
+    try {
+      // Pull full hits from localStorage hit keys
+      const hitList = []
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i)
+        if (k && k.startsWith('hit_')) {
+          try { hitList.push(JSON.parse(localStorage.getItem(k))) } catch { /* ignore */ }
+        }
+      }
+      // Determine country from ranges if available
+      const country = savedMeta?.country || null
+      if (!country) return  // can't contribute without country
+
+      contributeIntel(country, {
+        country_name: savedMeta.country_name || '',
+        ranges: savedMeta.ranges || [],
+        probed: savedMeta.probed || 0,
+        open: savedMeta.open || 0,
+        vulns: savedMeta.vulns || 0,
+        hits: hitList.slice(0, 500),
+      }).catch(() => { /* silent fail — intel contribution is best-effort */ })
+    } catch { /* ignore */ }
+  }
+
+  // ── Start a new scan ───────────────────────────────────────────────────
   const handleStart = async (e) => {
     e.preventDefault()
     setError('')
@@ -173,10 +268,14 @@ export default function ScanConsole() {
     setJobStatus(null)
     setJobId(null)
     setActiveHit(null)
+    setIntelBanner(null)
 
     const rangeList = ranges.split(/[\s,\n]+/).map((r) => r.trim()).filter(Boolean)
     if (!rangeList.length) { setError('Enter at least one CIDR range.'); return }
-    if (portMode === 'custom' && customPorts.length === 0) { setError('Add at least one port in Custom mode.'); return }
+    if (portMode === 'custom' && customPorts.length === 0) {
+      setError('Add at least one port in Custom mode.')
+      return
+    }
 
     try {
       const { job_id } = await startScan({
@@ -186,39 +285,44 @@ export default function ScanConsole() {
         run_cve: runCve,
         masscan_rate: masscanRate,
       })
-      setJobId(job_id)
-      setJobStatus('running')
-      esRef.current?.close()
-      esRef.current = streamScanJob(
-        job_id,
-        (event) => {
-          if (event.type === 'hit') setHits((prev) => [...prev, event.hit])
-          else if (event.type === 'stats') {
-            setStats({ probed: event.probed, responsive: event.responsive, vuln_hosts: event.vuln_hosts })
-            setJobStatus(event.status)
-          }
-        },
-        () => setJobStatus('done'),
-        () => setJobStatus('error'),
-      )
+
+      localStorage.setItem('scan_' + job_id, JSON.stringify({
+        jobId:      job_id,
+        ranges:     rangeList,
+        rangesText: ranges,
+        startedAt:  Date.now(),
+        status:     'running',
+        probed:     0,
+        open:       0,
+        vulns:      0,
+      }))
+
+      navigate('/scan/' + job_id, { replace: true })
     } catch (err) {
       setError(err.message)
     }
   }
 
-  const handleStop = () => { esRef.current?.close(); setJobStatus('stopped') }
+  const handleStop = () => {
+    esRef.current?.close()
+    setJobStatus('stopped')
+    if (jobId) {
+      const existing = JSON.parse(localStorage.getItem('scan_' + jobId) || '{}')
+      localStorage.setItem('scan_' + jobId, JSON.stringify({ ...existing, status: 'stopped' }))
+    }
+  }
 
   return (
     <div className="scan-shell">
-      {/* ── Config panel ── */}
+      {/* ── Left panel: config ─────────────────────────────────────────── */}
       <aside className="scan-config">
         <div className="scan-config-header">
+          <button className="back-link" onClick={() => navigate('/scan')}>← Scan Console</button>
           <p className="mono">masscan → banner → NVD</p>
-          <h2>Scan Console</h2>
+          <h2>Scan {urlJobId ? urlJobId.slice(0, 8) + '…' : 'New'}</h2>
         </div>
 
         <form className="form" onSubmit={handleStart}>
-          {/* Target ranges */}
           <div className="field">
             <label>Target ranges (CIDR, one per line)</label>
             <textarea
@@ -235,7 +339,6 @@ export default function ScanConsole() {
             </p>
           </div>
 
-          {/* Port mode */}
           <div className="field">
             <label>Port mode</label>
             <div className="pill-row">
@@ -252,22 +355,18 @@ export default function ScanConsole() {
               ))}
             </div>
 
-            {/* Preset info */}
             {portMode === 'preset' && (
               <p className="hint mono" style={{ fontSize: '0.7rem', marginTop: 6, lineHeight: 1.6 }}>
                 {PRESET_PORTS.join(', ')}
               </p>
             )}
 
-            {/* All ports warning */}
             {portMode === 'all' && (
               <p className="hint" style={{ marginTop: 6 }}>⚠ 1–65535 — requires masscan installed</p>
             )}
 
-            {/* Custom port picker */}
             {portMode === 'custom' && (
               <div className="port-picker" ref={portDropRef}>
-                {/* Selected port tags */}
                 <div className="port-tags">
                   {customPorts.length === 0 && (
                     <span className="hint" style={{ padding: '4px 2px' }}>No ports selected yet</span>
@@ -283,23 +382,19 @@ export default function ScanConsole() {
                     )
                   })}
                 </div>
-
-                {/* Search input */}
                 <div className="port-search-wrap">
                   <input
                     value={portSearch}
                     onChange={(e) => { setPortSearch(e.target.value); setPortDropOpen(true) }}
                     onFocus={() => setPortDropOpen(true)}
                     onKeyDown={handlePortSearchKey}
-                    placeholder="Search port or service… (Enter to add custom)"
+                    placeholder="Search port or service… (Enter to add)"
                     autoComplete="off"
                   />
                   {customPorts.length > 0 && (
                     <button type="button" className="ghost small" onClick={() => setCustomPorts([])}>Clear</button>
                   )}
                 </div>
-
-                {/* Dropdown */}
                 {portDropOpen && (
                   <div className="port-drop">
                     {filteredPortList.length === 0 && (
@@ -324,14 +419,14 @@ export default function ScanConsole() {
             )}
           </div>
 
-          {/* Rate */}
           <div className="field">
             <label>masscan rate (pps)</label>
-            <input type="number" value={masscanRate} min={100} max={100000}
-              onChange={(e) => setMasscanRate(Number(e.target.value))} />
+            <input
+              type="number" value={masscanRate} min={100} max={100000}
+              onChange={(e) => setMasscanRate(Number(e.target.value))}
+            />
           </div>
 
-          {/* CVE toggle */}
           <div className="switch-row">
             <label>
               <input type="checkbox" checked={runCve} onChange={(e) => setRunCve(e.target.checked)} />
@@ -349,7 +444,6 @@ export default function ScanConsole() {
           </div>
         </form>
 
-        {/* Stats */}
         <div className="scan-stats">
           <div className="stat-mini">
             <span className="mono">probed</span>
@@ -365,23 +459,52 @@ export default function ScanConsole() {
           </div>
         </div>
 
-        {jobId && <p className="hint mono" style={{ marginTop: 8, wordBreak: 'break-all' }}>job: {jobId}</p>}
-        {jobStatus && jobStatus !== 'running' && (
+        {jobId && (
+          <p className="hint mono" style={{ marginTop: 8, wordBreak: 'break-all' }}>
+            job: {jobId}
+          </p>
+        )}
+        {jobStatus && !['running', 'intel'].includes(jobStatus) && (
           <p className={`scan-status-badge ${jobStatus}`}>{jobStatus.toUpperCase()}</p>
         )}
         {error && <p className="error">{error}</p>}
       </aside>
 
-      {/* ── Hit stream ── */}
+      {/* ── Right panel: hit stream ────────────────────────────────────── */}
       <div className="scan-main">
+        {/* Community intel banner */}
+        {intelBanner && (
+          <div className="intel-scan-banner">
+            <span style={{ color: 'var(--accent)', marginRight: 8 }}>⚡</span>
+            Community data
+            {intelBanner.age_days > 0
+              ? ` — last scanned ${intelBanner.age_days}d ago`
+              : ' — scanned recently'
+            }
+            <button
+              className="ghost small"
+              style={{ marginLeft: 16, fontSize: '0.75rem' }}
+              onClick={() => {
+                setIntelBanner(null)
+                setHits([])
+                setStats({ probed: 0, responsive: 0, vuln_hosts: 0 })
+                setJobStatus(null)
+              }}
+            >
+              Run fresh scan
+            </button>
+          </div>
+        )}
+
         <div className="hit-stream" ref={logRef}>
           {hits.length === 0 && (
             <div className="hit-empty">
               {jobStatus === 'running'
                 ? <><span className="pulse-dot" /> waiting for open ports...</>
-                : 'No hits yet. Configure and start a scan.'}
+                : 'No hits yet. Configure and start a scan, or load community intel from the dashboard.'}
             </div>
           )}
+
           {hits.map((hit, i) => (
             <div
               key={i}
@@ -425,21 +548,15 @@ export default function ScanConsole() {
                       ))}
                     </div>
                   )}
-                  <a
+                  <button
                     className="ip-detail-link"
-                    href={`/ip/${encodeURIComponent(hit.ip)}`}
-                    target="_blank"
-                    rel="noreferrer"
                     onClick={(e) => {
-                      e.preventDefault()
-                      const w = window.open(`/ip/${encodeURIComponent(hit.ip)}`, '_blank')
-                      // pass hit via sessionStorage so new tab can read it
-                      sessionStorage.setItem(`hit_${hit.ip}_${hit.port}`, JSON.stringify(hit))
-                      w.focus()
+                      e.stopPropagation()
+                      navigate('/ip/' + encodeURIComponent(hit.ip), { state: { hit } })
                     }}
                   >
                     View IP detail →
-                  </a>
+                  </button>
                 </div>
               )}
             </div>

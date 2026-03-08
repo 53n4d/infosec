@@ -10,9 +10,6 @@ export default function NavBar() {
         <NavLink to="/scan" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
           <span className="nav-icon">⬡</span> Scan Console
         </NavLink>
-        <NavLink to="/cve" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-          <span className="nav-icon">⚠</span> CVE Probe
-        </NavLink>
       </div>
     </nav>
   )

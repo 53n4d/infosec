@@ -217,6 +217,21 @@ button.primary:active:not(:disabled) { transform: scale(0.98); }
 button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
 button.primary.small { padding: 6px 14px; font-size: 0.78rem; }
 
+button.ip-detail-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-top: 4px;
+  font-family: var(--mono-font);
+  font-size: 0.78rem;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+  display: inline-block;
+  text-decoration: none;
+}
+button.ip-detail-link:hover { text-decoration: underline; color: var(--accent2); }
+
 button.ghost, .ghost {
   background: transparent;
   color: var(--text);
@@ -346,6 +361,69 @@ button.ghost.small { padding: 6px 12px; font-size: 0.78rem; }
   color: var(--dim);
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* ── Scan Dashboard ──────────────────────────────────────── */
+.scan-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.scan-dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+.scan-dashboard-header h2 { font-size: 1.6rem; color: #fff; }
+
+.scan-dashboard-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px;
+  border: 1px dashed var(--border2);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.scan-card-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.scan-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.scan-card:hover { border-color: var(--accent); }
+
+.scan-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.scan-card-ranges {
+  font-family: var(--mono-font);
+  font-size: 0.82rem;
+  color: var(--text);
+}
+
+.scan-card-stats {
+  display: flex;
+  gap: 16px;
+  font-family: var(--mono-font);
+  font-size: 0.85rem;
+  color: var(--text);
 }
 
 /* ── Scan Console ────────────────────────────────────────── */
@@ -617,8 +695,6 @@ button.ghost.small { padding: 6px 12px; font-size: 0.78rem; }
 
 /* ── IP Detail page ──────────────────────────────────────── */
 .ip-detail-page {
-  display: flex;
-  justify-content: center;
   padding-top: 20px;
 }
 
@@ -627,7 +703,6 @@ button.ghost.small { padding: 6px 12px; font-size: 0.78rem; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 32px;
-  max-width: 640px;
   width: 100%;
 }
 
@@ -872,3 +947,261 @@ button.ghost.small { padding: 6px 12px; font-size: 0.78rem; }
   line-height: 1.4;
 }
 .ip-detail-link:hover { text-decoration: underline; color: var(--accent2) !important; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   INTEL LAYER — append to end of styles.css
+═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Scan Dashboard ─────────────────────────────────────────────────── */
+.scan-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+}
+
+.scan-dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 20px;
+}
+
+.scan-dashboard-header h2,
+.scan-history-section h2 {
+  font-size: 1.4rem;
+  color: #fff;
+}
+
+.scan-dashboard-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px;
+  border: 1px dashed var(--border2);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.scan-card-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.scan-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.scan-card:hover { border-color: var(--accent); }
+
+.scan-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.scan-card-ranges {
+  font-family: var(--mono-font);
+  font-size: 0.82rem;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.scan-card-stats {
+  display: flex;
+  gap: 16px;
+  font-family: var(--mono-font);
+  font-size: 0.85rem;
+  color: var(--text);
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.scan-history-section {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Country Intel lookup panel ─────────────────────────────────────── */
+.intel-lookup-panel {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.intel-lookup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.intel-lookup-form {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.intel-country-input {
+  width: 100%;
+}
+
+/* ── Intel card ─────────────────────────────────────────────────────── */
+.intel-card {
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border2);
+  background: var(--bg3);
+}
+
+.intel-card.no-data {
+  padding: 20px;
+}
+
+.intel-card-inner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.intel-card.fresh  { border-color: rgba(0,255,136,0.25); }
+.intel-card.stale  { border-color: rgba(255,51,102,0.25); }
+.intel-card.loading {
+  display: flex;
+  align-items: center;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.intel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border);
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.intel-header-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.intel-freshness-icon { font-size: 1.1rem; margin-top: 2px; }
+
+.intel-title {
+  font-size: 1rem;
+  color: #fff;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.intel-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.intel-stats {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.intel-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 20px;
+  border-right: 1px solid var(--border);
+  flex: 1;
+}
+
+.intel-stat:last-child { border-right: none; }
+
+.intel-stat strong {
+  font-family: var(--mono-font);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.intel-section {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.intel-section:last-child { border-bottom: none; }
+
+.intel-section-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+}
+
+.intel-cve-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.intel-cve-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(255,107,53,0.04);
+  border: 1px solid rgba(255,107,53,0.15);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.intel-hits-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.intel-hit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.intel-hit-row:hover { background: var(--bg2); }
+
+/* ── Intel scan banner (shown in ScanConsole when using community data) */
+.intel-scan-banner {
+  display: flex;
+  align-items: center;
+  padding: 10px 20px;
+  background: rgba(0,255,136,0.06);
+  border-bottom: 1px solid rgba(0,255,136,0.15);
+  font-family: var(--mono-font);
+  font-size: 0.82rem;
+  color: var(--text);
+  flex-shrink: 0;
+}

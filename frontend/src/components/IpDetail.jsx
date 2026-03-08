@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useParams, useLocation, Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import { fetchIpInfo } from '../api'
 
 function severityColor(score) {
@@ -11,21 +11,49 @@ function severityColor(score) {
   return 'var(--low)'
 }
 
+function pivotLinks(ip) {
+  return [
+    { href: 'https://www.shodan.io/host/' + ip,                label: 'Shodan' },
+    { href: 'https://www.virustotal.com/gui/ip-address/' + ip, label: 'VirusTotal' },
+    { href: 'https://bgp.he.net/ip/' + ip,                    label: 'BGP.he.net' },
+    { href: 'https://viz.greynoise.io/ip/' + ip,              label: 'GreyNoise' },
+    { href: 'https://www.abuseipdb.com/check/' + ip,          label: 'AbuseIPDB' },
+    { href: 'https://www.censys.io/hosts/' + ip,              label: 'Censys' },
+  ]
+}
+
 export default function IpDetail() {
   const { ip } = useParams()
   const location = useLocation()
+  const navigate = useNavigate()
 
-  // Hit data: prefer router state, fall back to sessionStorage (new-tab case)
-  const hitData = useMemo(() => {
-    if (location.state?.hit) return location.state.hit
-    for (let i = 0; i < sessionStorage.length; i++) {
-      const key = sessionStorage.key(i)
-      if (key?.startsWith(`hit_${ip}_`)) {
-        try { return JSON.parse(sessionStorage.getItem(key)) } catch { /* ignore */ }
-      }
-    }
-    return null
-  }, [ip, location.state])
+  const [hitData, setHitData] = useState(location.state?.hit || null)
+
+  useEffect(() => {
+    if (hitData) return
+    let attempts = 0
+    const poll = setInterval(() => {
+        console.log('polling... ip param is:', ip)
+        console.log('localStorage keys:', Object.keys(localStorage))
+        for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i)
+        console.log('checking key:', key, '| starts with:', 'hit_' + ip + '_')
+        if (key && key.startsWith('hit_' + ip + '_')) {
+            try {
+            const parsed = JSON.parse(localStorage.getItem(key))
+            if (parsed) {
+                setHitData(parsed)
+                clearInterval(poll)
+                return
+            }
+            } catch { /* ignore */ }
+        }
+        }
+        attempts++
+        if (attempts >= 10) clearInterval(poll)
+    }, 50)
+    return () => clearInterval(poll)
+  }, [ip, hitData])
 
   const [geo, setGeo] = useState(null)
   const [geoError, setGeoError] = useState('')
@@ -44,13 +72,32 @@ export default function IpDetail() {
       .finally(() => setGeoLoading(false))
   }, [ip])
 
+  const geoRows = geo ? [
+    ['Country',     geo.country + ' (' + geo.countryCode + ')'],
+    ['Region',      geo.regionName + ' (' + geo.region + ')'],
+    ['City',        geo.zip ? geo.city + ' ' + geo.zip : geo.city],
+    ['Coordinates', geo.lat + ', ' + geo.lon],
+    ['Timezone',    geo.timezone],
+    ['Reverse DNS', geo.reverse || '—'],
+    ['ISP',         geo.isp],
+    ['Org',         geo.org],
+    ['AS',          geo.as],
+  ] : []
+
   return (
     <div className="ip-detail-page">
       <div className="ip-detail-card">
 
-        {/* Header */}
         <div className="ip-detail-header">
-          <Link to={-1} className="back-link">← Back</Link>
+          <button className="back-link" onClick={() => {
+            if (window.history.length > 1) {
+              navigate(-1)
+            } else {
+              navigate('/scan')
+            }
+          }}>
+            &larr; Back
+          </button>
           <p className="mono eyebrow">IP Intelligence</p>
           <h1 className="ip-title">{ip}</h1>
           {hitData && (
@@ -66,28 +113,15 @@ export default function IpDetail() {
           )}
         </div>
 
-        {/* Geo section */}
         <div className="ip-section">
           <p className="ip-section-title mono">Geolocation / ASN</p>
           {geoLoading && <p className="hint">Resolving…</p>}
           {geoError && (
-            <p className="error" style={{ marginTop: 8 }}>
-              ⚠ {geoError}
-            </p>
+            <p className="error" style={{ marginTop: 8 }}>⚠ {geoError}</p>
           )}
           {geo && (
             <div className="ip-detail-grid">
-              {[
-                ['Country',     `${geo.country} (${geo.countryCode})`],
-                ['Region',      `${geo.regionName} (${geo.region})`],
-                ['City',        `${geo.city}${geo.zip ? ' ' + geo.zip : ''}`],
-                ['Coordinates', `${geo.lat}, ${geo.lon}`],
-                ['Timezone',    geo.timezone],
-                ['Reverse DNS', geo.reverse || '—'],
-                ['ISP',         geo.isp],
-                ['Org',         geo.org],
-                ['AS',          geo.as],
-              ].map(([label, value]) => (
+              {geoRows.map(([label, value]) => (
                 <div className="ip-field" key={label}>
                   <span className="ip-label mono">{label}</span>
                   <span className="ip-value">{value}</span>
@@ -97,16 +131,14 @@ export default function IpDetail() {
           )}
         </div>
 
-        {/* Banner section — only if we have hit data */}
-        {hitData?.banner && (
+        {hitData && hitData.banner && (
           <div className="ip-section">
             <p className="ip-section-title mono">Banner — port {hitData.port}</p>
             <pre className="banner-pre">{hitData.banner}</pre>
           </div>
         )}
 
-        {/* Version info */}
-        {hitData?.version_info?.length > 0 && (
+        {hitData && hitData.version_info && hitData.version_info.length > 0 && (
           <div className="ip-section">
             <p className="ip-section-title mono">Detected software</p>
             <div className="version-tags">
@@ -119,12 +151,9 @@ export default function IpDetail() {
           </div>
         )}
 
-        {/* CVEs */}
-        {hitData?.cves?.length > 0 && (
+        {hitData && hitData.cves && hitData.cves.length > 0 && (
           <div className="ip-section">
-            <p className="ip-section-title mono">
-              CVEs ({hitData.cves.length})
-            </p>
+            <p className="ip-section-title mono">CVEs ({hitData.cves.length})</p>
             <div className="cve-detail-list">
               {hitData.cves.map((cve, i) => (
                 <div key={i} className="cve-detail-item">
@@ -135,8 +164,8 @@ export default function IpDetail() {
                     </span>
                   </div>
                   <p className="cve-desc">{cve.desc}</p>
-                  <a
-                    href={`https://nvd.nist.gov/vuln/detail/${cve.id}`}
+                  
+                  <a href={'https://nvd.nist.gov/vuln/detail/' + cve.id}
                     target="_blank"
                     rel="noreferrer"
                     className="ip-detail-link"
@@ -150,18 +179,10 @@ export default function IpDetail() {
           </div>
         )}
 
-        {/* External pivots */}
         <div className="ip-section">
           <p className="ip-section-title mono">Pivot to</p>
           <div className="ip-actions">
-            {[
-              [`https://www.shodan.io/host/${ip}`,                    'Shodan'],
-              [`https://www.virustotal.com/gui/ip-address/${ip}`,     'VirusTotal'],
-              [`https://bgp.he.net/ip/${ip}`,                        'BGP.he.net'],
-              [`https://viz.greynoise.io/ip/${ip}`,                  'GreyNoise'],
-              [`https://www.abuseipdb.com/check/${ip}`,              'AbuseIPDB'],
-              [`https://www.censys.io/hosts/${ip}`,                  'Censys'],
-            ].map(([href, label]) => (
+            {pivotLinks(ip).map(({ href, label }) => (
               <a key={label} href={href} target="_blank" rel="noreferrer" className="ghost small">
                 {label} →
               </a>

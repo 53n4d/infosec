@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { fetchCountries, fetchRanges } from '../api'
 
-export default function RangeLookup() {
+export default function RangeLookup({ rangeResult, setRangeResult, selectedRanges, setSelectedRanges }) {
   const navigate = useNavigate()
   const [countries, setCountries] = useState([])
   const [country, setCountry] = useState('')
@@ -13,9 +13,9 @@ export default function RangeLookup() {
   const [force, setForce] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [result, setResult] = useState(null)
   const [copied, setCopied] = useState(false)
-  const [selectedRanges, setSelectedRanges] = useState([])
+
+  const result = rangeResult
 
   const extractCode = (val) => val.trim().slice(0, 2).toUpperCase()
 
@@ -23,7 +23,7 @@ export default function RangeLookup() {
     fetchCountries()
       .then((data) => {
         setCountries(data)
-        if (data.length) {
+        if (data.length && !country) {
           setCountry(data[0].code)
           setCountryInput(`${data[0].code} - ${data[0].name}`)
         }
@@ -63,12 +63,12 @@ export default function RangeLookup() {
     if (!country) return
     setError('')
     setLoading(true)
-    setResult(null)
+    setRangeResult(null)
     setSelectedRanges([])
     try {
       const data = await fetchRanges({ country, rirs: selectedRirs, force })
-      setResult(data)
-      setSelectedRanges(data.ranges) // select all by default
+      setRangeResult(data)
+      setSelectedRanges(data.ranges)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -99,7 +99,7 @@ export default function RangeLookup() {
 
   const goScan = () => {
     const toSend = selectedRanges.length ? selectedRanges : result?.ranges ?? []
-    navigate('/scan', { state: { ranges: toSend.join('\n') } })
+    navigate('/scan/new', { state: { ranges: toSend.join('\n') } })
   }
 
   return (
@@ -114,7 +114,6 @@ export default function RangeLookup() {
 
       <div className={`config-layout grid ${result ? 'grid-cols-result' : 'grid-cols-initial'}`}>
 
-        {/* Config form */}
         <form className="form config-form" onSubmit={onSubmit}>
           <div className="field full">
             <label>Country (type to filter or pick)</label>
@@ -166,7 +165,6 @@ export default function RangeLookup() {
           </button>
         </form>
 
-        {/* Results pane */}
         {result && (
           <div className="ranges-pane">
             <div className="result-head">
@@ -190,7 +188,6 @@ export default function RangeLookup() {
               </div>
             </div>
 
-            {/* Select-all bar */}
             <div className="range-select-bar">
               <label className="range-select-all-label">
                 <input
@@ -226,8 +223,8 @@ export default function RangeLookup() {
                         onChange={() => toggleRange(cidr)}
                       />
                       <span className="mono range-text">{cidr}</span>
-                      <a
-                        href={`/ip/${encodeURIComponent(cidr.split('/')[0])}`}
+                      
+                      <a href={`/ip/${encodeURIComponent(cidr.split('/')[0])}`}
                         target="_blank"
                         rel="noreferrer"
                         className="range-detail-link"

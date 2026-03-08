@@ -1,10 +1,9 @@
-from typing import Dict, List, Optional, Any
-
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
 
 
 class Country(BaseModel):
-    code: str = Field(..., description="ISO 3166-1 alpha-2 code")
+    code: str
     name: str
 
 
@@ -15,8 +14,12 @@ class RangeResponse(BaseModel):
     counts: Dict[str, int]
     total: int
     ranges: List[str]
-    last_updated: Optional[str]
+    last_updated: Optional[str] = None
     masscan_hint: Optional[str] = None
+    # Cache metadata
+    from_cache: bool = False
+    age_days: int = 0
+    freshness: str = "fresh"
 
 
 class CVEItem(BaseModel):
@@ -36,14 +39,21 @@ class HealthResponse(BaseModel):
     status: str
     timestamp: str
     available_rirs: int
+    intel_enabled: bool = False
 
 
 class ScanRequest(BaseModel):
     ranges: List[str]
-    ports: List[int]
+    ports: Optional[List[int]] = None
     all_ports: bool = False
-    run_cve: bool = False
+    run_cve: bool = True
     masscan_rate: int = 1000
+    country: Optional[str] = None      # optional — used for intel contribution
+
+
+class ScanResponse(BaseModel):
+    job_id: str
+    status: str
 
 
 class ScanHit(BaseModel):
@@ -53,18 +63,13 @@ class ScanHit(BaseModel):
     status: str
     banner: Optional[str] = None
     software: Optional[str] = None
-    version_info: List[Dict[str, str]] = []
-    cves: List[Dict[str, Any]] = []
-
-
-class ScanResponse(BaseModel):
-    job_id: str
-    hits: List[ScanHit]
+    version_info: Optional[List[Dict[str, Any]]] = None
+    cves: Optional[List[Dict[str, Any]]] = None
 
 
 class JobStatus(BaseModel):
     job_id: str
-    status: str  # "running" | "done" | "error"
+    status: str
     probed: int
     responsive: int
     vuln_hosts: int
