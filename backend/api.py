@@ -6,8 +6,7 @@ import re
 import sys
 import tempfile
 import uuid
-import urllib.request as _urllib_req
-import urllib.parse as _urllib_parse
+import xml.etree.ElementTree as ET
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -24,14 +23,15 @@ from backend.schemas import (
     CVEItem,
     HealthResponse,
     ScanRequest,
+    ScanResponse,
     ScanHit,
     JobStatus,
 )
 
 app = FastAPI(
     title="XSEVERITY IP Range + CVE API",
-    version="0.3.0",
-    description="Async IP range lookup across all RIRs with masscan + CVE scanning.",
+    version="0.2.0",
+    description="Async IP range lookup across all RIRs with real masscan + CVE scanning.",
 )
 
 app.add_middleware(
@@ -41,13 +41,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── In-memory job store ────────────────────────────────────────────────────
 _jobs: dict[str, dict] = {}
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Health / meta
-# ══════════════════════════════════════════════════════════════════════════
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
@@ -72,17 +67,11 @@ async def ports():
 @app.get("/")
 async def root():
     return {
-        "message": "XSEVERITY IP range lookup API v0.3",
-        "endpoints": ["/health", "/countries", "/rirs",
-                      "/ranges?country=BA",
-                      "/cves?software=nginx&version=1.24",
-                      "/scan", "/scan/{job_id}", "/scan/{job_id}/stream"],
+        "message": "XSEVERITY IP range lookup API v0.2",
+        "endpoints": ["/health", "/countries", "/rirs", "/ranges?country=BA",
+                      "/cves?software=nginx&version=1.24", "/scan", "/scan/{job_id}"],
     }
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Range lookup
-# ══════════════════════════════════════════════════════════════════════════
 
 @app.get("/ranges", response_model=RangeResponse)
 async def ranges(
@@ -109,15 +98,8 @@ async def ranges(
         ranges=data["ranges"],
         last_updated=data["last_updated"],
         masscan_hint=hint,
-        from_cache=False,
-        age_days=0,
-        freshness="fresh",
     )
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# CVE lookup
-# ══════════════════════════════════════════════════════════════════════════
 
 @app.get("/cves", response_model=CVEResponse)
 async def cves(software: str = Query(...), version: Optional[str] = None):
@@ -135,10 +117,6 @@ async def cves(software: str = Query(...), version: Optional[str] = None):
     ]
     return CVEResponse(software=software, version=version, results=items)
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Scan — POST kicks off job, GET /scan/{id} polls, GET /scan/{id}/stream SSE
-# ══════════════════════════════════════════════════════════════════════════
 
 @app.post("/scan", response_model=dict)
 async def start_scan(request: ScanRequest):
@@ -165,87 +143,145 @@ async def get_scan(job_id: str):
 
 @app.get("/scan/{job_id}/stream")
 async def stream_scan(job_id: str):
-    job = _jobs.get(job_id)
-    if not job:
+    if job_id not in _jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
     async def event_generator():
-        sent_hits = 0
+        last_hit_count = 0
         while True:
+            job = _jobs.get(job_id)
+            if not job:
+                break
+
             hits = job["hits"]
-            while sent_hits < len(hits):
-                hit = hits[sent_hits]
-                hit_dict = hit.dict() if hasattr(hit, "dict") else hit
-                yield f"data: {json.dumps({'type': 'hit', 'hit': hit_dict})}\n\n"
-                sent_hits += 1
+            new_hits = hits[last_hit_count:]
+            for hit in new_hits:
+                data = json.dumps({"type": "hit", "hit": hit.dict() if hasattr(hit, "dict") else hit})
+                yield f"data: {data}\n\n"
+            last_hit_count = len(hits)
 
-            yield f"data: {json.dumps({'type': 'stats', 'probed': job['probed'], 'responsive': job['responsive'], 'vuln_hosts': job['vuln_hosts'], 'status': job['status']})}\n\n"
+            stats = {
+                "type": "stats",
+                "probed": job["probed"],
+                "responsive": job["responsive"],
+                "vuln_hosts": job["vuln_hosts"],
+                "status": job["status"],
+            }
+            yield f"data: {json.dumps(stats)}\n\n"
 
-            if job["status"] != "running":
-                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            if job["status"] in ("done", "error"):
+                yield f"data: {json.dumps({'type': 'done', 'status': job['status']})}\n\n"
                 break
 
             await asyncio.sleep(0.5)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Internal scan runner
-# ══════════════════════════════════════════════════════════════════════════
+CVE_PROBE_PORTS = {21, 22, 23, 25, 80, 443, 445, 3306, 3389, 5432, 6379, 8080, 8443, 9200, 27017}
+
+VERSION_PATTERNS = [
+    (r"[Ss]erver:\s*([^\r\n]+)",       "HTTP Server"),
+    (r"SSH-[\d.]+-([^\r\n ]+)",        "SSH"),
+    (r"^220[- ]([^\r\n]+)",            "FTP"),
+    (r"(Apache[/\s][\d.]+)",           "Apache"),
+    (r"(nginx[/\s][\d.]+)",            "nginx"),
+    (r"(OpenSSH[_\s][\d.p]+)",         "OpenSSH"),
+    (r"(vsftpd[\s/][\d.]+)",           "vsftpd"),
+    (r"(Microsoft-IIS[/\s][\d.]+)",    "IIS"),
+    (r"(PHP[/\s][\d.]+)",              "PHP"),
+    (r"(WordPress[\s/][\d.]+)",        "WordPress"),
+    (r"(Jetty[/\s(][\d.]+)",           "Jetty"),
+    (r"(Tomcat[/\s][\d.]+)",           "Tomcat"),
+    (r"(lighttpd[/\s][\d.]+)",         "lighttpd"),
+    (r"(ProFTPD[\s/][\d.]+)",          "ProFTPD"),
+    (r"(OpenSSL[/\s][\d.a-z]+)",       "OpenSSL"),
+    (r"(redis[\s_][\d.]+)",            "Redis"),
+    (r"(MongoDB[\s/][\d.]+)",          "MongoDB"),
+    (r"(Elasticsearch[/\s][\d.]+)",    "Elasticsearch"),
+]
+
+
+async def _grab_banner(ip: str, port: int, timeout: float = 3.0) -> Optional[str]:
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(ip, port), timeout=timeout
+        )
+        if port in (80, 8080, 8000, 8001, 8008, 8088, 8888):
+            writer.write(b"HEAD / HTTP/1.0\r\nHost: " + ip.encode() + b"\r\n\r\n")
+        else:
+            writer.write(b"\r\n")
+        await writer.drain()
+        try:
+            data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
+            banner = data.decode(errors="ignore").strip()
+        except Exception:
+            banner = ""
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return banner if banner else None
+    except Exception:
+        return None
+
+
+def _extract_version_info(banner: str) -> list:
+    findings = []
+    for pattern, label in VERSION_PATTERNS:
+        m = re.search(pattern, banner, re.IGNORECASE)
+        if m:
+            findings.append({"label": label, "value": m.group(1).strip()})
+    return findings
+
 
 async def _run_scan_job(job_id: str, request: ScanRequest):
     job = _jobs[job_id]
-    try:
-        ranges_list   = request.ranges
-        ports_list    = request.ports or core.masscan_probe_ports()
-        run_cve       = getattr(request, "run_cve", True)
-        masscan_rate  = getattr(request, "masscan_rate", 1000)
+    ports_to_scan = list(request.ports) if (not request.all_ports and request.ports) else sorted(CVE_PROBE_PORTS)
+    if request.scan_mode == 'deep':
+        await _run_with_nmap(job_id, job, request, ports_to_scan)
+    else:
+        await _run_with_masscan(job_id, job, request, ports_to_scan)
+    job["status"] = "done"
 
-        if not ranges_list:
-            job["status"] = "error"
-            job["error"]  = "No ranges provided"
-            return
 
-        # Try masscan first, fall back to async probe
-        masscan_ok = False
+async def _run_with_masscan(job_id: str, job: dict, request: ScanRequest, ports: list):
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as rf:
+        rf.write("\n".join(request.ranges) + "\n")
+        ranges_file = rf.name
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as jf:
+        json_out = jf.name
+    # Delete pre-created file — masscan runs as root and must create it itself
+    os.unlink(json_out)
+
+    ports_arg = ",".join(map(str, sorted(ports)))
+    # Calculate dynamic wait time based on scan size
+    total_ips = 0
+    for r in request.ranges:
         try:
-            import shutil
-            if shutil.which("masscan"):
-                await _run_masscan_job(job_id, job, ranges_list, ports_list, run_cve, masscan_rate)
-                masscan_ok = True
-        except Exception as e:
-            print(f"[scan] masscan failed: {e}, falling back to async probe")
+            total_ips += ipaddress.ip_network(r, strict=False).num_addresses
+        except Exception:
+            total_ips += 1
+    total_packets = total_ips * max(len(ports), 1)
+    dynamic_wait  = max(10, int(total_packets / request.masscan_rate) + 5)
 
-        if not masscan_ok:
-            targets = []
-            for cidr in ranges_list:
-                try:
-                    net = ipaddress.ip_network(cidr, strict=False)
-                    for ip in list(net.hosts())[:256]:
-                        for port in ports_list:
-                            targets.append((str(ip), port))
-                except Exception:
-                    continue
-            await _run_async_probe(job_id, job, targets, run_cve)
+    cmd = [
+        "sudo", "masscan",
+        "-iL", ranges_file,
+        "-p", "0-65535" if request.all_ports else ports_arg,
+        "--rate", str(request.masscan_rate),
+        "--open-only",
+        "--wait", str(dynamic_wait),
+        "-oJ", json_out,
+    ]
 
-        job["status"] = "done"
-
-    except Exception as e:
-        job["status"] = "error"
-        job["error"]  = str(e)
-
-
-async def _run_masscan_job(job_id, job, ranges, ports, run_cve, rate):
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-        f.write("\n".join(ranges))
-        ranges_file = f.name
-
-    json_out  = ranges_file.replace(".txt", "_out.json")
-    ports_arg = ",".join(str(p) for p in ports)
-
-    cmd = ["masscan", "-iL", ranges_file, "-p", ports_arg,
-           "--rate", str(rate), "-oJ", json_out, "--wait", "2"]
+    print(f"[masscan] {total_ips} IPs × {max(len(ports),1)} ports = {total_packets} pkts @ {request.masscan_rate}pps → wait={dynamic_wait}s", flush=True)
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -253,46 +289,69 @@ async def _run_masscan_job(job_id, job, ranges, ports, run_cve, rate):
         stderr=asyncio.subprocess.DEVNULL,
     )
 
-    queue        = asyncio.Queue(maxsize=500)
+    queue = asyncio.Queue(maxsize=100)
     seen_software: set = set()
 
-    watcher = asyncio.create_task(
-        _watch_masscan_output(json_out, queue, proc, ports)
+    watcher_task = asyncio.create_task(
+        _watch_masscan_json(json_out, queue, proc, set(ports))
     )
-    workers = [
-        asyncio.create_task(_banner_worker(job, queue, seen_software, run_cve))
-        for _ in range(20)
+    worker_tasks = [
+        asyncio.create_task(_probe_worker(job_id, job, queue, seen_software, request.run_cve))
+        for _ in range(10)
     ]
 
     await proc.wait()
-    await watcher
-    await queue.join()
+    await watcher_task
+    await asyncio.gather(*worker_tasks)
 
-    for w in workers:
-        w.cancel()
-
+    # After masscan + probe workers finish, emit silent hits for IPs that
+    # had no open ports — so frontend can show them when "Only findings" is off
     try:
-        os.unlink(ranges_file)
-        os.unlink(json_out)
-    except Exception:
-        pass
+        import ipaddress as _ip2
+        found_ips = {h.ip for h in job["hits"]}
+        for cidr in request.ranges:
+            try:
+                net = _ip2.ip_network(cidr, strict=False)
+                # Skip huge ranges — only enumerate /20 and smaller (4096 IPs max)
+                if net.num_addresses > 4096:
+                    continue
+                for addr in net.hosts():
+                    ip_str = str(addr)
+                    if ip_str not in found_ips:
+                        silent_hit = ScanHit(
+                            range=cidr,
+                            ip=ip_str,
+                            port=0,
+                            status="silent",
+                            banner=None,
+                            software=None,
+                            version_info=[],
+                            cves=[],
+                        )
+                        job["hits"].append(silent_hit)
+                        job["probed"] += 1
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[silent] error: {e}", flush=True)
+
+    for f in (ranges_file, json_out):
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
 
 
-async def _watch_masscan_output(json_out, queue, masscan_proc, probe_ports):
-    probe_set = set(probe_ports)
-    seen_lines = 0
+async def _watch_masscan_json(json_out: str, queue: asyncio.Queue,
+                               proc, probe_ports: set, poll: float = 0.5):
+    seen = 0
+    while not os.path.exists(json_out):
+        await asyncio.sleep(poll)
 
     while True:
-        await asyncio.sleep(0.3)
-        if not os.path.exists(json_out):
-            if masscan_proc.returncode is not None:
-                break
-            continue
-
         with open(json_out, "r", errors="ignore") as f:
             lines = f.readlines()
-
-        for line in lines[seen_lines:]:
+        for line in lines[seen:]:
             line = line.strip().rstrip(",")
             if not line or line.startswith("[") or line.startswith("]"):
                 continue
@@ -301,37 +360,33 @@ async def _watch_masscan_output(json_out, queue, masscan_proc, probe_ports):
                 ip = entry.get("ip", "")
                 for p in entry.get("ports", []):
                     port = int(p.get("port", 0))
-                    if not probe_ports or port in probe_set:
+                    if port in probe_ports:
                         await queue.put((ip, port))
-            except Exception:
-                continue
+            except (json.JSONDecodeError, KeyError, ValueError):
+                pass
+        seen = len(lines)
 
-        seen_lines = len(lines)
-        if masscan_proc.returncode is not None:
+        if proc.returncode is not None and seen >= len(lines):
             break
+        await asyncio.sleep(poll)
 
-    # Signal all workers to stop
-    for _ in range(20):
+    for _ in range(10):
         await queue.put(None)
 
 
-async def _banner_worker(job, queue, seen_software, run_cve):
+async def _probe_worker(job_id: str, job: dict, queue: asyncio.Queue,
+                         seen_software: set, run_cve: bool):
     while True:
         item = await queue.get()
         if item is None:
             queue.task_done()
             break
-
         ip, port = item
         job["probed"] += 1
+        job["responsive"] += 1
 
         banner = await _grab_banner(ip, port)
-        if not banner:
-            queue.task_done()
-            continue
-
-        job["responsive"] += 1
-        version_info = _extract_version_info(banner)
+        version_info = _extract_version_info(banner) if banner else []
         cves = []
 
         if run_cve and version_info:
@@ -345,12 +400,13 @@ async def _banner_worker(job, queue, seen_software, run_cve):
                         job["vuln_hosts"] += 1
                     await asyncio.sleep(0.7)
 
+        # Always add hit — even without banner (masscan confirmed port open)
         hit = ScanHit(
             range="",
             ip=ip,
             port=port,
             status="open",
-            banner=banner[:256],
+            banner=banner[:256] if banner else None,
             software=version_info[0]["value"] if version_info else None,
             version_info=version_info,
             cves=cves,
@@ -359,183 +415,225 @@ async def _banner_worker(job, queue, seen_software, run_cve):
         queue.task_done()
 
 
-async def _run_async_probe(job_id: str, job: dict,
-                            targets: list[tuple[str, int]], run_cve: bool):
-    sem           = asyncio.Semaphore(50)
-    seen_software: set = set()
-
-    async def probe(ip: str, port: int):
-        async with sem:
-            job["probed"] += 1
-            banner = await _grab_banner(ip, port)
-            if not banner:
-                return
-
-            job["responsive"] += 1
-            version_info = _extract_version_info(banner)
-            cves = []
-
-            if run_cve and version_info:
-                for info in version_info:
-                    key = info["value"].lower()
-                    if key not in seen_software:
-                        seen_software.add(key)
-                        found = await core.search_cves(info["label"], info["value"])
-                        cves.extend(found)
-                        if found:
-                            job["vuln_hosts"] += 1
-                        await asyncio.sleep(0.7)
-
-            hit = ScanHit(
-                range="",
-                ip=ip,
-                port=port,
-                status="open",
-                banner=banner[:256],
-                software=version_info[0]["value"] if version_info else None,
-                version_info=version_info,
-                cves=cves,
-            )
-            job["hits"].append(hit)
-
-    await asyncio.gather(*[probe(ip, port) for ip, port in targets])
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# Banner grab + version extraction
-# ══════════════════════════════════════════════════════════════════════════
-
-async def _grab_banner(ip: str, port: int, timeout: float = 3.0) -> Optional[str]:
-    try:
-        if port in (80, 8080, 8000, 8008, 8088):
-            return await _http_banner(ip, port, timeout)
-        if port in (443, 8443):
-            return await _https_banner(ip, port, timeout)
-        return await _tcp_banner(ip, port, timeout)
-    except Exception:
-        return None
-
-
-async def _tcp_banner(ip, port, timeout):
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(ip, port), timeout=timeout
-    )
-    try:
-        try:
-            data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
-            if data:
-                return data.decode("utf-8", errors="replace").strip()
-        except asyncio.TimeoutError:
-            pass
-        probes = {
-            22: b"SSH-2.0-XSEVERITY\r\n",
-            21: b"USER anonymous\r\n",
-            25: b"EHLO xseverity.local\r\n",
-            110: b"QUIT\r\n",
-            143: b"A001 CAPABILITY\r\n",
-        }
-        probe = probes.get(port, b"\r\n")
-        writer.write(probe)
-        await writer.drain()
-        data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
-        return data.decode("utf-8", errors="replace").strip() if data else None
-    finally:
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except Exception:
-            pass
-
-
-async def _http_banner(ip, port, timeout):
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(ip, port), timeout=timeout
-    )
-    try:
-        req = f"HEAD / HTTP/1.0\r\nHost: {ip}\r\nUser-Agent: XSEVERITY/1.0\r\n\r\n"
-        writer.write(req.encode())
-        await writer.drain()
-        data = await asyncio.wait_for(reader.read(2048), timeout=timeout)
-        return data.decode("utf-8", errors="replace").strip() if data else None
-    finally:
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except Exception:
-            pass
-
-
-async def _https_banner(ip, port, timeout):
-    import ssl
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(ip, port, ssl=ctx), timeout=timeout
-    )
-    try:
-        req = f"HEAD / HTTP/1.0\r\nHost: {ip}\r\nUser-Agent: XSEVERITY/1.0\r\n\r\n"
-        writer.write(req.encode())
-        await writer.drain()
-        data = await asyncio.wait_for(reader.read(2048), timeout=timeout)
-        return data.decode("utf-8", errors="replace").strip() if data else None
-    finally:
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except Exception:
-            pass
-
-
-def _extract_version_info(banner: str) -> list[dict]:
-    patterns = [
-        (r"SSH-[\d.]+-(\S+)",             "SSH"),
-        (r"Server:\s*(.+?)[\r\n]",        "HTTP Server"),
-        (r"(OpenSSH[_/][\d.p]+\S*)",      "OpenSSH"),
-        (r"(nginx/[\d.]+\S*)",            "nginx"),
-        (r"(Apache/[\d.]+\S*)",           "Apache"),
-        (r"(lighttpd/[\d.]+\S*)",         "lighttpd"),
-        (r"(Caddy\S*)",                   "Caddy"),
-        (r"(Microsoft-IIS/[\d.]+)",       "IIS"),
-        (r"(MySQL\s+[\d.]+\S*)",          "MySQL"),
-        (r"(PostgreSQL\s+[\d.]+\S*)",     "PostgreSQL"),
-        (r"(MongoDB\s+[\d.]+\S*)",        "MongoDB"),
-        (r"(Redis\s+[\d.]+\S*)",          "Redis"),
-        (r"\d20\d.*?(vsftpd[\d. ]+)",     "vsftpd"),
-        (r"(ProFTPD[\d. ]+\S*)",          "ProFTPD"),
-        (r"(Exim\s+[\d.]+\S*)",           "Exim"),
-        (r"(Postfix\S*)",                 "Postfix"),
-        (r"(Dovecot\S*)",                 "Dovecot"),
-    ]
-    found = []
-    seen  = set()
-    for pattern, label in patterns:
-        m = re.search(pattern, banner, re.IGNORECASE)
-        if m:
-            val = m.group(1).strip()
-            if val not in seen:
-                seen.add(val)
-                found.append({"label": label, "value": val})
-    return found
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# IP Intelligence — geo/ASN proxy
-# ══════════════════════════════════════════════════════════════════════════
+import urllib.request as _urllib_req
+import urllib.parse as _urllib_parse
 
 @app.get("/ip/{ip}")
 async def ip_intel(ip: str):
     fields = "status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query,reverse"
-    url    = f"http://ip-api.com/json/{_urllib_parse.quote(ip)}?fields={fields}"
-    loop   = asyncio.get_event_loop()
-
+    url = f"http://ip-api.com/json/{_urllib_parse.quote(ip)}?fields={fields}"
+    loop = asyncio.get_event_loop()
     def _fetch():
         req = _urllib_req.Request(url, headers={"User-Agent": "xseverity-recon/1.0"})
         with _urllib_req.urlopen(req, timeout=8) as r:
             return json.loads(r.read())
-
     try:
         data = await loop.run_in_executor(None, _fetch)
         return data
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"IP lookup failed: {exc}")
+
+async def _run_with_nmap(job_id: str, job: dict, request: ScanRequest, ports: list):
+    """Deep scan using nmap — service detection, OS fingerprint, vuln scripts."""
+    # Flatten all IPs from ranges (nmap handles CIDRs natively but we enumerate
+    # for progress tracking — skip ranges larger than /20)
+    targets = []
+    for cidr in request.ranges:
+        try:
+            net = ipaddress.ip_network(cidr, strict=False)
+            if net.num_addresses <= 4096:
+                targets.extend(str(h) for h in net.hosts())
+            else:
+                targets.append(cidr)  # pass CIDR directly to nmap
+        except Exception:
+            targets.append(cidr)
+
+    if not targets:
+        job["status"] = "done"
+        return
+
+    ports_arg = ",".join(map(str, sorted(ports))) if ports else "21,22,23,25,80,443,445,3306,3389,5432,6379,8080,8443,9200,27017"
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tf:
+        tf.write("\n".join(targets) + "\n")
+        targets_file = tf.name
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".xml", delete=False) as xf:
+        xml_out = xf.name
+    os.unlink(xml_out)  # let nmap create it as root
+
+    cmd = [
+        "sudo", "nmap",
+        "-iL", targets_file,
+        "-p", ports_arg,
+        "-sV",                      # service/version detection
+        "-O",                       # OS detection
+        "--script", "vuln,banner",  # vuln NSE scripts + banner
+        "-T4",                      # aggressive timing
+        "--open",                   # only show open ports
+        "--host-timeout", "90s",    # skip unresponsive hosts after 90s
+        "--min-parallelism", str(min(500, max(1, request.nmap_parallelism))),  # user-defined
+        "--max-retries", "2",       # retry unresponsive ports twice
+        "-oX", xml_out,             # XML output — parsed incrementally
+    ]
+
+    print(f"[nmap] {len(targets)} targets, ports={ports_arg}", flush=True)
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+
+    # Poll XML output while nmap runs
+    seen_ips = set()
+    while proc.returncode is None:
+        await asyncio.sleep(2)
+        if os.path.exists(xml_out):
+            _parse_nmap_xml(xml_out, job, seen_ips)
+
+    await proc.wait()
+
+    # Final parse after nmap exits
+    if os.path.exists(xml_out):
+        _parse_nmap_xml(xml_out, job, seen_ips)
+
+    # Silent hosts — IPs nmap found no open ports on
+    found_ips = {h.ip for h in job["hits"]}
+    for cidr in request.ranges:
+        try:
+            net = ipaddress.ip_network(cidr, strict=False)
+            if net.num_addresses > 4096:
+                continue
+            for addr in net.hosts():
+                ip_str = str(addr)
+                if ip_str not in found_ips:
+                    job["hits"].append(ScanHit(
+                        range=cidr, ip=ip_str, port=0,
+                        status="silent", banner=None, software=None,
+                        version_info=[], cves=[],
+                    ))
+                    job["probed"] += 1
+        except Exception:
+            pass
+
+    for f in (targets_file, xml_out):
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
+
+
+def _parse_nmap_xml(xml_path: str, job: dict, seen_ips: set):
+    """Parse nmap XML output and append new hits to job."""
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+    except ET.ParseError:
+        return  # nmap still writing — incomplete XML
+
+    for host in root.findall("host"):
+        # Only up hosts
+        state = host.find("status")
+        if state is None or state.get("state") != "up":
+            continue
+
+        addr_el = host.find("address[@addrtype='ipv4']")
+        if addr_el is None:
+            continue
+        ip = addr_el.get("addr", "")
+        if not ip:
+            continue
+
+        # OS detection
+        os_name = None
+        os_el = host.find(".//osmatch")
+        if os_el is not None:
+            os_name = os_el.get("name")
+
+        ports_el = host.find("ports")
+        if ports_el is None:
+            continue
+
+        for port_el in ports_el.findall("port"):
+            port_state = port_el.find("state")
+            if port_state is None or port_state.get("state") != "open":
+                continue
+
+            port_num = int(port_el.get("portid", 0))
+            key = f"{ip}:{port_num}"
+            if key in seen_ips:
+                continue
+            seen_ips.add(key)
+
+            # Service info
+            svc_el   = port_el.find("service")
+            software = None
+            banner   = None
+            version_info = []
+
+            if svc_el is not None:
+                name    = svc_el.get("name", "")
+                product = svc_el.get("product", "")
+                version = svc_el.get("version", "")
+                extra   = svc_el.get("extrainfo", "")
+                ostype  = svc_el.get("ostype", "")
+                tunnel  = svc_el.get("tunnel", "")
+
+                parts = [p for p in [product, version, extra] if p]
+                software = " ".join(parts) if parts else name or None
+                banner = f"{name} {' '.join(parts)}".strip() or None
+
+                if product:   version_info.append({"label": "Product", "value": product})
+                if version:   version_info.append({"label": "Version", "value": version})
+                if ostype:    version_info.append({"label": "OS Type", "value": ostype})
+                if tunnel:    version_info.append({"label": "Tunnel",  "value": tunnel})
+                if os_name:   version_info.append({"label": "OS",      "value": os_name})
+
+            # NSE script output (vuln scripts) — deduplicated by CVE ID
+            cve_map = {}  # id -> best entry
+            for script in port_el.findall("script"):
+                script_id  = script.get("id", "")
+                script_out = script.get("output", "")
+
+                # Try to extract per-CVE blocks with score
+                # vulners output: "CVE-2024-6387  10.0  https://..."
+                for line in script_out.splitlines():
+                    line = line.strip()
+                    cve_match = re.search(r"(CVE-\d{4}-\d+)", line)
+                    if not cve_match:
+                        continue
+                    cve_id = cve_match.group(1)
+                    if cve_id in cve_map:
+                        continue  # already have this CVE — skip duplicate
+
+                    # Try to extract CVSS score from the line
+                    score_match = re.search(r"(\d+\.\d+)", line)
+                    score = score_match.group(1) if score_match else "N/A"
+
+                    # Severity from score
+                    try:
+                        s = float(score)
+                        severity = "CRITICAL" if s >= 9.0 else "HIGH" if s >= 7.0 else "MEDIUM" if s >= 4.0 else "LOW"
+                    except ValueError:
+                        severity = "UNKNOWN"
+
+                    cve_map[cve_id] = {
+                        "id":       cve_id,
+                        "score":    score,
+                        "severity": severity,
+                        "desc":     f"{script_id}: {line[:300]}",
+                    }
+
+            cves = list(cve_map.values())
+            if cves:
+                job["vuln_hosts"] += 1
+
+            hit = ScanHit(
+                range="", ip=ip, port=port_num, status="open",
+                banner=banner, software=software,
+                version_info=version_info, cves=cves,
+            )
+            job["hits"].append(hit)
+            job["probed"] += 1
+            job["responsive"] += 1

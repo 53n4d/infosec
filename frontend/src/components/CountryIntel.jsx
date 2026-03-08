@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { FaCircle, FaRegCircle } from 'react-icons/fa'
+import { FiAlertTriangle } from 'react-icons/fi'
+import { GoDiamond } from 'react-icons/go'
 import { fetchCountryIntel } from '../api'
 
 function freshnessColor(freshness) {
@@ -10,10 +13,13 @@ function freshnessColor(freshness) {
 }
 
 function freshnessIcon(freshness) {
-  if (freshness === 'fresh')  return '🟢'
-  if (freshness === 'recent') return '🟡'
-  if (freshness === 'aging')  return '🟠'
-  return '🔴'
+  return (
+    <FaCircle
+      style={{ color: freshnessColor(freshness) }}
+      size={14}
+      aria-label={`${freshness} freshness`}
+    />
+  )
 }
 
 function severityColor(score) {
@@ -60,7 +66,7 @@ export default function CountryIntel({ country, countryName, onUseData, onRunSca
     return (
       <div className="intel-card no-data">
         <div className="intel-card-inner">
-          <span style={{ fontSize: '1.1rem' }}>⚪</span>
+          <FaRegCircle style={{ fontSize: '1.1rem', color: 'var(--dim)' }} />
           <div>
             <p className="intel-title">No community data for {country}</p>
             <p className="hint">Be the first to scan this country and contribute intel.</p>
@@ -85,7 +91,11 @@ export default function CountryIntel({ country, countryName, onUseData, onRunSca
             <p className="hint mono" style={{ fontSize: '0.75rem' }}>
               {age_days === 0 ? 'updated today' : `updated ${age_days}d ago`}
               {scan_count ? ` · ${scan_count} contributor${scan_count > 1 ? 's' : ''}` : ''}
-              {stale && <span style={{ color: 'var(--crit)', marginLeft: 8 }}>⚠ stale — recommend fresh scan</span>}
+              {stale && (
+                <span style={{ color: 'var(--crit)', marginLeft: 8, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <FiAlertTriangle aria-label="stale data" /> stale — recommend fresh scan
+                </span>
+              )}
             </p>
           </div>
         </div>
@@ -126,7 +136,9 @@ export default function CountryIntel({ country, countryName, onUseData, onRunSca
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {top_software.map((sw) => (
               <span key={sw} className="version-tag">
-                <span className="mono" style={{ color: 'var(--dim)', fontSize: '0.7rem', marginRight: 4 }}>◈</span>
+                <span className="mono" style={{ color: 'var(--dim)', fontSize: '0.7rem', marginRight: 4 }}>
+                  <GoDiamond aria-hidden />
+                </span>
                 {sw}
               </span>
             ))}

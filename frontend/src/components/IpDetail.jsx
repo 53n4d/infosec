@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
+import { FiAlertTriangle, FiArrowUpRight } from 'react-icons/fi'
 import { fetchIpInfo } from '../api'
 
 function severityColor(score) {
@@ -117,7 +118,9 @@ export default function IpDetail() {
           <p className="ip-section-title mono">Geolocation / ASN</p>
           {geoLoading && <p className="hint">Resolving…</p>}
           {geoError && (
-            <p className="error" style={{ marginTop: 8 }}>⚠ {geoError}</p>
+            <p className="error" style={{ marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <FiAlertTriangle aria-label="warning" /> {geoError}
+            </p>
           )}
           {geo && (
             <div className="ip-detail-grid">
@@ -169,9 +172,9 @@ export default function IpDetail() {
                     target="_blank"
                     rel="noreferrer"
                     className="ip-detail-link"
-                    style={{ fontSize: '0.75rem' }}
+                    style={{ fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: 4 }}
                   >
-                    NVD →
+                    NVD <FiArrowUpRight aria-hidden />
                   </a>
                 </div>
               ))}
@@ -183,8 +186,15 @@ export default function IpDetail() {
           <p className="ip-section-title mono">Pivot to</p>
           <div className="ip-actions">
             {pivotLinks(ip).map(({ href, label }) => (
-              <a key={label} href={href} target="_blank" rel="noreferrer" className="ghost small">
-                {label} →
+              <a
+                key={label}
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                className="ghost small"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                {label} <FiArrowUpRight aria-hidden />
               </a>
             ))}
           </div>

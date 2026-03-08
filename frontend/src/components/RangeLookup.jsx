@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { FiArrowRight, FiArrowUpRight } from 'react-icons/fi'
 import { fetchCountries, fetchRanges } from '../api'
 
 export default function RangeLookup({ rangeResult, setRangeResult, selectedRanges, setSelectedRanges }) {
@@ -69,6 +70,9 @@ export default function RangeLookup({ rangeResult, setRangeResult, selectedRange
       const data = await fetchRanges({ country, rirs: selectedRirs, force })
       setRangeResult(data)
       setSelectedRanges(data.ranges)
+      // FIX: lock input to what was actually fetched so country state stays consistent
+      setCountry(data.country)
+      setCountryInput(`${data.country} - ${data.country_name}`)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -99,7 +103,13 @@ export default function RangeLookup({ rangeResult, setRangeResult, selectedRange
 
   const goScan = () => {
     const toSend = selectedRanges.length ? selectedRanges : result?.ranges ?? []
-    navigate('/scan/new', { state: { ranges: toSend.join('\n') } })
+    navigate('/scan/new', {
+      state: {
+        ranges:      toSend.join('\n'),
+        country:     result?.country      || country,
+        countryName: result?.country_name  || '',
+      },
+    })
   }
 
   return (
@@ -120,7 +130,11 @@ export default function RangeLookup({ rangeResult, setRangeResult, selectedRange
             <div className="combo">
               <input
                 value={countryInput}
-                onChange={(e) => { setCountryInput(e.target.value); setCountry(extractCode(e.target.value)); setPickerOpen(true) }}
+                onChange={(e) => {
+                  setCountryInput(e.target.value)
+                  setCountry(extractCode(e.target.value))
+                  setPickerOpen(true)
+                }}
                 onFocus={() => setPickerOpen(true)}
                 onBlur={handleBlur}
                 placeholder="Start typing a code or country name"
@@ -128,8 +142,13 @@ export default function RangeLookup({ rangeResult, setRangeResult, selectedRange
               {pickerOpen && filteredCountries.length > 0 && (
                 <div className="combo-list">
                   {filteredCountries.slice(0, 12).map((c) => (
-                    <button type="button" key={c.code} className="combo-item"
-                      onMouseDown={(e) => e.preventDefault()} onClick={() => commitCountry(c.code)}>
+                    <button
+                      type="button"
+                      key={c.code}
+                      className="combo-item"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => commitCountry(c.code)}
+                    >
                       <span className="mono">{c.code}</span><span>{c.name}</span>
                     </button>
                   ))}
@@ -145,9 +164,14 @@ export default function RangeLookup({ rangeResult, setRangeResult, selectedRange
             <label>RIRs</label>
             <div className="pill-row">
               {rirOptions.map((rir) => (
-                <button type="button" key={rir}
+                <button
+                  type="button"
+                  key={rir}
                   className={selectedRirs.includes(rir) ? 'pill selected' : 'pill'}
-                  onClick={() => toggleRir(rir)}>{rir}</button>
+                  onClick={() => toggleRir(rir)}
+                >
+                  {rir}
+                </button>
               ))}
             </div>
             <p className="hint">All selected by default.</p>
@@ -182,8 +206,10 @@ export default function RangeLookup({ rangeResult, setRangeResult, selectedRange
                   className="primary small"
                   onClick={goScan}
                   disabled={selectedRanges.length === 0}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
                 >
-                  {selectedRanges.length > 0 ? `Scan (${selectedRanges.length}) →` : 'Select ranges'}
+                  {selectedRanges.length > 0 ? `Scan (${selectedRanges.length})` : 'Select ranges'}
+                  {selectedRanges.length > 0 && <FiArrowRight aria-hidden />}
                 </button>
               </div>
             </div>
@@ -223,14 +249,17 @@ export default function RangeLookup({ rangeResult, setRangeResult, selectedRange
                         onChange={() => toggleRange(cidr)}
                       />
                       <span className="mono range-text">{cidr}</span>
-                      
-                      <a href={`/ip/${encodeURIComponent(cidr.split('/')[0])}`}
+                      <a
+                        href={`/ip/${encodeURIComponent(cidr.split('/')[0])}`}
                         target="_blank"
                         rel="noreferrer"
                         className="range-detail-link"
                         onClick={(e) => e.stopPropagation()}
                         title="IP detail"
-                      >↗</a>
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <FiArrowUpRight aria-hidden />
+                      </a>
                     </label>
                   )
                 })}

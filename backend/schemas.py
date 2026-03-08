@@ -49,6 +49,8 @@ class ScanRequest(BaseModel):
     run_cve: bool = True
     masscan_rate: int = 1000
     country: Optional[str] = None      # optional — used for intel contribution
+    scan_mode: str = 'wide'            # 'wide' (masscan) | 'deep' (nmap)
+    nmap_parallelism: int = 100        # --min-parallelism for deep scan (1–500)
 
 
 class ScanResponse(BaseModel):
@@ -57,10 +59,10 @@ class ScanResponse(BaseModel):
 
 
 class ScanHit(BaseModel):
-    range: str
+    range: str = ""
     ip: str
-    port: int
-    status: str
+    port: int = 0          # 0 = silent host (no open ports found by masscan)
+    status: str = "open"   # "open" | "silent"
     banner: Optional[str] = None
     software: Optional[str] = None
     version_info: Optional[List[Dict[str, Any]]] = None
