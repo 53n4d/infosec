@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 IP Range Lookup by Country Code — Async + CVE Scan
-Author: CILYNX / xseverity@0f1c3r
+Author: XSEVERITY / xseverity@0f1c3r
 Fetches IPv4 ranges from all 5 RIRs concurrently (RIPE, ARIN, APNIC, LACNIC, AFRINIC)
 Optional: masscan streaming producer → async CVE worker pool (10 concurrent workers)
 """
@@ -673,7 +673,7 @@ async def lookup(
     ensure_cache_dir()
 
     connector = aiohttp.TCPConnector(limit=10)
-    headers   = {"User-Agent": "ip-range-lookup/2.0 (CILYNX)"}
+    headers   = {"User-Agent": "ip-range-lookup/2.0 (XSEVERITY)"}
 
     async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
         tasks   = [download_rir(session, n, u, force=force) for n, u in selected_rirs.items()]
@@ -755,7 +755,7 @@ async def lookup(
 
 def interactive_mode() -> dict:
     print(f"\n{BOLD}╔══════════════════════════════════════════════╗{RESET}")
-    print(f"{BOLD}║      IP Range Lookup — CILYNX (async)        ║{RESET}")
+    print(f"{BOLD}║     IP Range Lookup — XSEVERITY (async)      ║{RESET}")
     print(f"{BOLD}║   All RIRs | masscan producer | CVE workers  ║{RESET}")
     print(f"{BOLD}╚══════════════════════════════════════════════╝{RESET}\n")
 
@@ -804,7 +804,7 @@ def interactive_mode() -> dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="IP Range Lookup by Country Code — CILYNX (async + masscan + CVE)",
+        description="IP Range Lookup by Country Code — XSEVERITY (async + masscan + CVE)",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 Examples:
