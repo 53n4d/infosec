@@ -1,31 +1,9 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { FiX } from 'react-icons/fi'
 
-// ─── Simplified continent outlines (lng,lat) ──────────────────────────────────
-const LAND_PATHS = [
-  // North America
-  "M -168,72 L -140,60 L -125,50 L -117,32 L -110,23 L -90,16 L -83,10 L -77,8 L -75,18 L -68,22 L -60,46 L -64,48 L -67,47 L -70,43 L -82,42 L -83,46 L -88,48 L -90,47 L -93,49 L -97,49 L -101,49 L -110,49 L -115,49 L -120,49 L -124,49 L -124,46 L -126,50 L -130,55 L -134,58 L -137,60 L -139,60 L -141,68 L -155,70 L -158,72 L -168,72 Z",
-  // Greenland
-  "M -72,76 L -60,82 L -44,83 L -32,78 L -28,70 L -45,60 L -58,62 L -68,66 L -72,76 Z",
-  // South America
-  "M -80,10 L -75,8 L -68,6 L -60,5 L -52,5 L -44,2 L -40,-4 L -36,-10 L -40,-22 L -44,-24 L -38,-15 L -42,-20 L -50,-30 L -52,-34 L -58,-38 L -64,-42 L -68,-46 L -70,-54 L -68,-56 L -64,-52 L -62,-48 L -56,-44 L -50,-40 L -48,-26 L -42,-16 L -38,-8 L -40,-4 L -44,2 L -52,5 L -58,3 L -62,1 L -68,2 L -74,4 L -78,8 L -80,10 Z",
-  // Europe
-  "M -10,36 L 0,36 L 4,40 L 10,44 L 14,44 L 18,40 L 24,38 L 28,42 L 30,46 L 26,50 L 20,54 L 18,58 L 22,60 L 24,66 L 20,68 L 16,70 L 14,68 L 10,56 L 6,54 L 2,54 L 0,58 L 4,64 L 2,70 L -2,68 L -4,62 L -2,58 L -6,54 L -10,50 L -8,44 L -10,36 Z",
-  // Africa
-  "M -18,16 L -10,8 L 0,5 L 10,5 L 20,8 L 32,16 L 40,20 L 44,12 L 44,4 L 42,-4 L 38,-16 L 32,-28 L 26,-34 L 18,-36 L 10,-26 L 4,-16 L -2,-8 L -12,0 L -18,10 L -18,16 Z",
-  // Asia
-  "M 26,42 L 36,36 L 44,36 L 56,24 L 60,22 L 68,24 L 72,20 L 72,10 L 80,10 L 88,22 L 92,26 L 100,20 L 104,10 L 110,20 L 120,22 L 130,32 L 140,40 L 142,46 L 140,52 L 134,46 L 128,48 L 122,52 L 116,48 L 110,42 L 100,40 L 90,44 L 80,46 L 74,48 L 68,52 L 60,58 L 50,58 L 44,54 L 38,52 L 32,48 L 26,42 Z",
-  // Australia
-  "M 114,-22 L 120,-18 L 130,-14 L 138,-16 L 146,-20 L 150,-24 L 152,-28 L 148,-34 L 140,-38 L 132,-34 L 124,-30 L 118,-28 L 114,-22 Z",
-  // Japan
-  "M 130,32 L 134,34 L 140,38 L 144,42 L 140,44 L 136,38 L 130,32 Z",
-  // UK
-  "M -6,50 L 0,52 L 2,58 L -2,60 L -6,56 L -6,50 Z",
-  // Indonesia
-  "M 96,4 L 100,2 L 106,0 L 110,-2 L 116,-4 L 120,-4 L 124,-2 L 128,-2 L 130,0 L 128,2 L 124,2 L 118,0 L 112,0 L 106,2 L 100,4 L 96,4 Z",
-]
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
 function countryFlag(code) {
   if (!code || code.length !== 2) return '🌐'
@@ -34,48 +12,192 @@ function countryFlag(code) {
          String.fromCodePoint(code.toUpperCase().charCodeAt(1) + offset)
 }
 
+// Equirectangular projection — maps [lon, lat] → [x, y] in viewBox space
 function projectLL(lat, lon, w, h, margin = 0) {
   const x = ((lon + 180) / 360) * (w - 2 * margin) + margin
-  const y = ((90  - lat) / 180) * (h - 2 * margin) + margin
+  const y = ((90 - lat) / 180) * (h - 2 * margin) + margin
   return { x, y }
-}
-
-function projectPath(pathStr, w, h, margin) {
-  return pathStr.replace(/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/g, (_, lon, lat) => {
-    const { x, y } = projectLL(parseFloat(lat), parseFloat(lon), w, h, margin)
-    return `${x.toFixed(1)},${y.toFixed(1)}`
-  })
 }
 
 function ipJitter(ip) {
   let h = 0
   for (let i = 0; i < ip.length; i++) h = (h * 31 + ip.charCodeAt(i)) >>> 0
   const angle = (h % 360) * (Math.PI / 180)
-  const r = 0.4 + ((h >> 10) % 30) / 100
+  // Use 1.5° spread radius so IPs in the same city are visually separated at high zoom
+  const r = 0.5 + ((h >> 10) % 100) / 100 * 1.0   // 0.5° – 1.5°
   return { dx: Math.cos(angle) * r, dy: Math.sin(angle) * r }
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// TopoJSON → SVG path converter (no d3 required)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Decode TopoJSON delta-encoded arc into [lon, lat] coordinate array
+function decodeArc(arc, transform) {
+  const { scale, translate } = transform
+  let x = 0, y = 0
+  return arc.map(([dx, dy]) => {
+    x += dx
+    y += dy
+    return [x * scale[0] + translate[0], y * scale[1] + translate[1]]
+  })
+}
+
+// Stitch TopoJSON arcs into a single coordinate ring, respecting arc reversal
+function stitchArcs(topology, arcIndices) {
+  const coords = []
+  for (let idx of arcIndices) {
+    const reversed = idx < 0
+    const arc = topology.arcs[reversed ? ~idx : idx]
+    const decoded = decodeArc(arc, topology.transform)
+    const pts = reversed ? decoded.slice().reverse() : decoded
+    // Skip first point of each arc except the first (it's shared with previous arc's last)
+    coords.push(...(coords.length === 0 ? pts : pts.slice(1)))
+  }
+  return coords
+}
+
+// Convert a TopoJSON geometry object into SVG path strings, splitting on antimeridian crossings
+function topoGeomToPath(topology, geometry, W, H, MARGIN) {
+  const paths = []
+
+  const renderRings = (rings) => {
+    let d = ''
+    for (const ring of rings) {
+      const coords = stitchArcs(topology, ring)
+      if (coords.length < 2) continue
+
+      // Split ring into sub-segments at antimeridian crossings (lon jump > 180°)
+      // This prevents lines shooting across the entire map for Russia, Antarctica etc.
+      let segment = []
+      const segments = [segment]
+      for (let i = 0; i < coords.length; i++) {
+        if (i > 0) {
+          const prevLon = coords[i - 1][0]
+          const currLon = coords[i][0]
+          if (Math.abs(currLon - prevLon) > 180) {
+            // Antimeridian crossing — start a new sub-segment (MoveTo instead of LineTo)
+            segment = []
+            segments.push(segment)
+          }
+        }
+        segment.push(coords[i])
+      }
+
+      // Render each sub-segment as its own M...L...Z (or just M...L if it's a continuation)
+      for (let si = 0; si < segments.length; si++) {
+        const seg = segments[si]
+        if (seg.length < 2) continue
+        const pts = seg.map(([lon, lat]) => {
+          const { x, y } = projectLL(lat, lon, W, H, MARGIN)
+          return `${x.toFixed(1)},${y.toFixed(1)}`
+        })
+        // First segment gets M+Z (closes back), subsequent segments are open sub-paths
+        if (si === 0) {
+          d += `M ${pts[0]} L ${pts.slice(1).join(' L ')} Z `
+        } else {
+          d += `M ${pts[0]} L ${pts.slice(1).join(' L ')} `
+        }
+      }
+    }
+    return d.trim()
+  }
+
+  if (geometry.type === 'Polygon') {
+    const d = renderRings(geometry.arcs)
+    if (d) paths.push(d)
+  } else if (geometry.type === 'MultiPolygon') {
+    for (const polygon of geometry.arcs) {
+      const d = renderRings(polygon)
+      if (d) paths.push(d)
+    }
+  }
+
+  return paths
+}
+
+// Main converter: returns array of SVG path `d` strings from a TopoJSON object name
+function topoToPaths(topology, objectName, W, H, MARGIN) {
+  const obj = topology.objects[objectName]
+  if (!obj) return []
+  const allPaths = []
+  for (const geom of obj.geometries) {
+    const paths = topoGeomToPath(topology, geom, W, H, MARGIN)
+    allPaths.push(...paths)
+  }
+  return allPaths
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Compute initial transform to fit all points in view
+// ─────────────────────────────────────────────────────────────────────────────
+function computeFitTransform(points, W, H, MARGIN) {
+  if (!points.length) return { x: 0, y: 0, k: 1 }
+  const lats = points.map(p => p.lat)
+  const lons = points.map(p => p.lon)
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats)
+  const minLon = Math.min(...lons), maxLon = Math.max(...lons)
+
+  const padLat = Math.max((maxLat - minLat) * 0.8, 4)
+  const padLon = Math.max((maxLon - minLon) * 0.8, 6)
+  const pMinLat = minLat - padLat, pMaxLat = maxLat + padLat
+  const pMinLon = minLon - padLon, pMaxLon = maxLon + padLon
+
+  const { x: x1, y: y1 } = projectLL(pMaxLat, pMinLon, W, H, MARGIN)
+  const { x: x2, y: y2 } = projectLL(pMinLat, pMaxLon, W, H, MARGIN)
+  const bw = Math.max(x2 - x1, 1), bh = Math.max(y2 - y1, 1)
+
+  const k  = Math.min(W / bw, H / bh, 200)
+  const cx = (x1 + x2) / 2
+  const cy = (y1 + y2) / 2
+  return { k, x: W / 2 - cx * k, y: H / 2 - cy * k }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Component
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function GeoMap({ points = [], onClose }) {
   const W = 960, H = 500, MARGIN = 20
   const svgRef = useRef(null)
 
+  const [landPaths,     setLandPaths]     = useState([])
+  const [mapLoading,    setMapLoading]    = useState(true)
   const [tooltip,       setTooltip]       = useState(null)
   const [hovered,       setHovered]       = useState(null)
   const [selected,      setSelected]      = useState(null)
-  const [transform,     setTransform]     = useState({ x: 0, y: 0, k: 1 })
+  // Lazy initial state — compute fit transform once from points at mount
+  const [transform,     setTransform]     = useState(() => computeFitTransform(points, W, H, MARGIN))
   const [dragging,      setDragging]      = useState(null)
   const [sidebarFilter, setSidebarFilter] = useState('')
 
-  // ESC to close
+
+  // ── Load real world map data ──────────────────────────────────────────────
+  useEffect(() => {
+    // Natural Earth 110m land polygons via TopoJSON — lightweight (~105KB), public domain
+    const URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json'
+    fetch(URL)
+      .then(r => r.json())
+      .then(topo => {
+        // world-atlas uses object name "land"
+        const paths = topoToPaths(topo, 'land', W, H, MARGIN)
+        setLandPaths(paths)
+      })
+      .catch(() => {
+        // Silent fallback — dots still render, just no land background
+      })
+      .finally(() => setMapLoading(false))
+  }, [])
+
+  // ── ESC to close ─────────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose?.() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // Derived stats
+  // ── Derived stats ─────────────────────────────────────────────────────────
   const countryCounts = useMemo(() =>
     points.reduce((acc, p) => {
       const k = p.country || 'Unknown'
@@ -95,9 +217,6 @@ export default function GeoMap({ points = [], onClose }) {
     return Object.entries(pc).sort((a, b) => b[1] - a[1])[0]
   }, [points])
 
-  const projectedPaths = useMemo(() =>
-    LAND_PATHS.map(p => projectPath(p, W, H, MARGIN)), [])
-
   const filteredPoints = useMemo(() =>
     sidebarFilter
       ? points.filter(p =>
@@ -112,7 +231,7 @@ export default function GeoMap({ points = [], onClose }) {
     e.preventDefault()
     const delta = e.deltaY > 0 ? 0.85 : 1.18
     setTransform(t => {
-      const newK = Math.max(0.8, Math.min(8, t.k * delta))
+      const newK = Math.max(0.8, Math.min(200, t.k * delta))
       const rect = svgRef.current?.getBoundingClientRect()
       if (!rect) return { ...t, k: newK }
       const cx = e.clientX - rect.left
@@ -152,9 +271,13 @@ export default function GeoMap({ points = [], onClose }) {
     setSelected(point.ip)
     const j = ipJitter(point.ip)
     const { x, y } = projectLL(point.lat + j.dy, point.lon + j.dx, W, H, MARGIN)
-    setTransform({ x: 300 - x * 2.5, y: 250 - y * 2.5, k: 2.5 })
+    const k = Math.min(transform.k * 2.5, 80)   // zoom in further but don't exceed 80×
+    setTransform({ x: W / 2 - x * k, y: H / 2 - y * k, k })
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="gm-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose?.() }}>
       <div className="gm-modal">
@@ -165,7 +288,8 @@ export default function GeoMap({ points = [], onClose }) {
             <span className="gm-dot" />
             <span className="gm-title mono">GEO MAP</span>
             <span className="gm-sub mono">
-              {points.length} host{points.length !== 1 ? 's' : ''} · {Object.keys(countryCounts).length} countr{Object.keys(countryCounts).length !== 1 ? 'ies' : 'y'}
+              {points.length} host{points.length !== 1 ? 's' : ''} ·{' '}
+              {Object.keys(countryCounts).length} countr{Object.keys(countryCounts).length !== 1 ? 'ies' : 'y'}
             </span>
           </div>
 
@@ -229,7 +353,7 @@ export default function GeoMap({ points = [], onClose }) {
 
               <g transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
 
-                {/* Ocean */}
+                {/* Ocean background */}
                 <rect x={0} y={0} width={W} height={H} fill="url(#gm-ocean)" />
 
                 {/* Graticule grid */}
@@ -255,9 +379,20 @@ export default function GeoMap({ points = [], onClose }) {
                   )
                 })}
 
-                {/* Landmasses */}
-                {projectedPaths.map((d, i) => (
-                  <path key={i} d={d} fill="#0e2035" stroke="#1e4060" strokeWidth="0.8" />
+                {/* Real landmasses from Natural Earth TopoJSON */}
+                {mapLoading && (
+                  <text x={W / 2} y={H / 2} textAnchor="middle"
+                    fontSize="11" fill="#1e4060" fontFamily="monospace">
+                    loading map…
+                  </text>
+                )}
+                {landPaths.map((d, i) => (
+                  <path key={i} d={d}
+                    fill="#0e2035"
+                    stroke="#1e4060"
+                    strokeWidth="0.5"
+                    strokeLinejoin="round"
+                  />
                 ))}
 
                 {/* Country cluster labels */}
@@ -270,7 +405,7 @@ export default function GeoMap({ points = [], onClose }) {
                   return (
                     <text key={country} x={x} y={y - 14}
                       textAnchor="middle" fontSize="8"
-                      fill="var(--accent)" fillOpacity="0.45"
+                      fill="var(--accent)" fillOpacity="0.55"
                       fontFamily="monospace"
                       style={{ pointerEvents: 'none' }}>
                       {country} ×{pts.length}
@@ -278,16 +413,20 @@ export default function GeoMap({ points = [], onClose }) {
                   )
                 })}
 
-                {/* Host dots */}
+                {/* Host dots — radius divided by k so they're constant pixel-size at any zoom */}
                 {points.map((p) => {
                   const j = ipJitter(p.ip)
                   const { x, y } = projectLL(p.lat + j.dy, p.lon + j.dx, W, H, MARGIN)
                   const isHov = hovered  === p.ip
                   const isSel = selected === p.ip
-                  const color = isSel ? '#ffdd00' : isHov ? '#ffffff' : 'var(--accent)'
+                  const color = isSel ? '#ffdd00' : isHov ? '#ffffff' : '#00ff88'
+                  // Scale dot radius inversely so it's always ~4–6px on screen
+                  const baseR  = (isHov || isSel ? 5.5 : 3.5) / transform.k
+                  const ringR  = 10 / transform.k
+                  const ringR2 = 16 / transform.k
+                  const sw     = 1  / transform.k
                   return (
                     <g key={p.ip}
-                      filter="url(#gm-glow)"
                       style={{ cursor: 'pointer' }}
                       onMouseEnter={(e) => {
                         setHovered(p.ip)
@@ -297,88 +436,89 @@ export default function GeoMap({ points = [], onClose }) {
                       onMouseLeave={() => { setHovered(null); setTooltip(null) }}
                       onClick={() => setSelected(p.ip === selected ? null : p.ip)}
                     >
-                      <circle className="gm-ring"  cx={x} cy={y} r={5}
-                        fill="none" stroke={color} strokeWidth="1"   strokeOpacity="0.5" />
-                      <circle className="gm-ring2" cx={x} cy={y} r={5}
-                        fill="none" stroke={color} strokeWidth="0.5" strokeOpacity="0.3" />
+                      {/* Pulse rings — only show when not too zoomed out (they'd overlap) */}
+                      {transform.k > 2 && <>
+                        <circle cx={x} cy={y} r={ringR}
+                          fill="none" stroke={color} strokeWidth={sw}
+                          strokeOpacity="0.4"
+                          style={{ animation: 'none', opacity: 0.4 }} />
+                        <circle cx={x} cy={y} r={ringR2}
+                          fill="none" stroke={color} strokeWidth={sw * 0.5}
+                          strokeOpacity="0.2" />
+                      </>}
                       <circle cx={x} cy={y}
-                        r={isHov || isSel ? 5.5 : 3.5}
+                        r={baseR}
                         fill={color}
-                        fillOpacity={isHov || isSel ? 1 : 0.85}
-                        style={{ transition: 'r 0.15s, fill 0.15s' }} />
+                        fillOpacity={isHov || isSel ? 1 : 0.9}
+                        style={{ transition: 'r 0.1s' }} />
                     </g>
                   )
                 })}
               </g>
             </svg>
 
-            {/* Hover tooltip */}
+            {/* Tooltip */}
             {tooltip && (
               <div className="gm-tooltip" style={{
                 left: Math.min(tooltip.x + 14, 680),
                 top:  Math.max(tooltip.y - 10, 10),
               }}>
-                <div className="gm-tip-ip mono">{tooltip.point.ip}</div>
-
+                <div className="gm-tip-ip">{tooltip.point.ip}</div>
                 {tooltip.point.port && (
                   <div className="gm-tip-row">
-                    <span className="gm-tip-label mono">PORT</span>
-                    <span className="mono" style={{ color: 'var(--accent)' }}>{tooltip.point.port}</span>
+                    <span className="gm-tip-label">PORT</span>
+                    <span style={{ color: 'var(--accent)' }}>{tooltip.point.port}</span>
                     {tooltip.point.software && (
-                      <span className="gm-tip-soft mono">{tooltip.point.software}</span>
+                      <span className="gm-tip-soft">{tooltip.point.software}</span>
                     )}
                   </div>
                 )}
                 <div className="gm-tip-row">
-                  <span className="gm-tip-label mono">COUNTRY</span>
-                  <span className="mono">{countryFlag(tooltip.point.countryCode)} {tooltip.point.country || '—'}</span>
+                  <span className="gm-tip-label">COUNTRY</span>
+                  <span>{countryFlag(tooltip.point.countryCode)} {tooltip.point.country || '—'}</span>
                 </div>
                 {tooltip.point.city && (
                   <div className="gm-tip-row">
-                    <span className="gm-tip-label mono">CITY</span>
-                    <span className="mono">{tooltip.point.city}</span>
+                    <span className="gm-tip-label">CITY</span>
+                    <span>{tooltip.point.city}</span>
                   </div>
                 )}
                 {tooltip.point.isp && (
                   <div className="gm-tip-row">
-                    <span className="gm-tip-label mono">ISP</span>
-                    <span className="gm-tip-dim mono">{tooltip.point.isp}</span>
+                    <span className="gm-tip-label">ISP</span>
+                    <span className="gm-tip-dim">{tooltip.point.isp}</span>
                   </div>
                 )}
                 {tooltip.point.org && tooltip.point.org !== tooltip.point.isp && (
                   <div className="gm-tip-row">
-                    <span className="gm-tip-label mono">ORG</span>
-                    <span className="gm-tip-dim mono">{tooltip.point.org}</span>
+                    <span className="gm-tip-label">ORG</span>
+                    <span className="gm-tip-dim">{tooltip.point.org}</span>
                   </div>
                 )}
                 <div className="gm-tip-row">
-                  <span className="gm-tip-label mono">LAT/LON</span>
-                  <span className="gm-tip-coords mono">
+                  <span className="gm-tip-label">LAT/LON</span>
+                  <span className="gm-tip-coords">
                     {tooltip.point.lat?.toFixed(3)}, {tooltip.point.lon?.toFixed(3)}
                   </span>
                 </div>
               </div>
             )}
 
-            <p className="gm-hint mono">scroll to zoom · drag to pan · click pin to select</p>
+            <p className="gm-hint mono">scroll to zoom · drag to pan · click pin to highlight</p>
           </div>
 
-          {/* ── Sidebar ── */}
-          <aside className="gm-sidebar">
+          {/* Sidebar */}
+          <div className="gm-sidebar">
             <div className="gm-sidebar-head">
-              <span className="mono" style={{ fontSize: '0.7rem', color: 'var(--accent)', letterSpacing: 2 }}>
-                HOSTS
-              </span>
-              <span className="mono hint">{points.length}</span>
+              <span className="mono" style={{ fontSize: '0.7rem', color: 'var(--accent)', letterSpacing: 2 }}>HOSTS</span>
+              <span className="mono" style={{ fontSize: '0.7rem', color: 'var(--dim)' }}>{points.length}</span>
             </div>
-
             <input
               className="gm-sidebar-search"
               placeholder="Filter IP / country…"
               value={sidebarFilter}
               onChange={e => setSidebarFilter(e.target.value)}
             />
-
             <div className="gm-sidebar-list">
               {filteredPoints.map((p) => (
                 <div
@@ -387,31 +527,28 @@ export default function GeoMap({ points = [], onClose }) {
                     'gm-sidebar-row',
                     selected === p.ip ? 'gm-sidebar-row--selected' : '',
                     hovered  === p.ip ? 'gm-sidebar-row--hovered'  : '',
-                  ].filter(Boolean).join(' ')}
+                  ].join(' ')}
                   onClick={() => flyTo(p)}
                   onMouseEnter={() => setHovered(p.ip)}
                   onMouseLeave={() => setHovered(null)}
                 >
                   <div className="gm-sidebar-row-top">
-                    <span className="gm-sidebar-ip mono">{p.ip}</span>
-                    {p.port && <span className="gm-sidebar-port mono">:{p.port}</span>}
+                    <span className="gm-sidebar-ip">{p.ip}</span>
+                    {p.port && <span className="gm-sidebar-port">:{p.port}</span>}
                   </div>
-                  <div className="gm-sidebar-meta mono">
-                    {countryFlag(p.countryCode)}{p.city ? ` ${p.city},` : ''} {p.country || '—'}
+                  <div className="gm-sidebar-meta">
+                    {countryFlag(p.countryCode)} {p.city ? `${p.city}, ` : ''}{p.country || '—'}
                   </div>
-                  {p.software && (
-                    <div className="gm-sidebar-sw mono">{p.software}</div>
-                  )}
+                  {p.software && <div className="gm-sidebar-sw">{p.software}</div>}
                 </div>
               ))}
-
               {filteredPoints.length === 0 && (
-                <p className="hint mono" style={{ padding: '12px', fontSize: '0.75rem' }}>
+                <p style={{ padding: '12px', color: 'var(--dim)', fontSize: '0.75rem', fontFamily: 'monospace' }}>
                   no matches
                 </p>
               )}
             </div>
-          </aside>
+          </div>
 
         </div>
       </div>
