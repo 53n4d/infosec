@@ -1,21 +1,21 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
-  FiAlertTriangle,
-  FiArrowLeft,
-  FiArrowUpRight,
-  FiCamera,
-  FiDownload,
-  FiFilter,
-  FiGlobe,
-  FiLock,
-  FiPlay,
-  FiRefreshCw,
-  FiSearch,
-  FiShare2,
-  FiX,
-  FiZap,
-} from 'react-icons/fi'
+  TbAlertTriangle,
+  TbArrowLeft,
+  TbArrowUpRight,
+  TbBolt,
+  TbCamera,
+  TbDownload,
+  TbFilter,
+  TbLock,
+  TbPlayerPlay,
+  TbRefresh,
+  TbSearch,
+  TbShare2,
+  TbWorld,
+  TbX,
+} from 'react-icons/tb'
 import { startScan, streamScanJob, fetchCountries, fetchIpInfo } from '../api'
 import { contributeCountryIntel } from '../intel'
 import GeoMap from './GeoMap'
@@ -106,7 +106,7 @@ function matchesPortService(hit, term) {
 }
 
 function countryFlag(code) {
-  if (!code || code.length !== 2) return '🌐'
+  if (!code || code.length !== 2) return ''
   const offset = 0x1F1E6 - 65
   return String.fromCodePoint(code.toUpperCase().charCodeAt(0) + offset) +
          String.fromCodePoint(code.toUpperCase().charCodeAt(1) + offset)
@@ -205,7 +205,7 @@ export default function ScanConsole() {
 
   const visibleHits = useMemo(() => {
     const base = onlyFindings
-      ? hits.filter(h => h.banner || h.software || h.cves?.length)
+      ? hits.filter(h => h.status !== 'silent')
       : hits
     return base
       .filter(h => matchesPortService(h, portServiceFilter))
@@ -275,6 +275,7 @@ export default function ScanConsole() {
   useEffect(() => {
     if (!urlJobId) return
 
+    let savedStatus = 'running'
     try {
       const saved = JSON.parse(localStorage.getItem('scan_' + urlJobId) || '{}')
       if (saved.rangesText)       setRanges(saved.rangesText)
@@ -286,16 +287,28 @@ export default function ScanConsole() {
         setCountryName(saved.countryName || saved.country)
         setCountryInput(
           saved.countryName
-            ? `${saved.country} - ${saved.countryName}` : saved.country)
+            ? `${saved.country} - ${saved.countryName}`
+            : saved.country)
         setCountryLocked(true)
       }
+      if (saved.probed)    setStats(s => ({ ...s, probed: saved.probed }))
+      if (saved.open)      setStats(s => ({ ...s, responsive: saved.open }))
+      if (saved.vulns)     setStats(s => ({ ...s, vuln_hosts: saved.vulns }))
+      if (saved.status)    savedStatus = saved.status
     } catch { /* ignore */ }
 
     setJobId(urlJobId)
+    setIntelBanner(null)
+
+    // Don't reconnect if job is already finished
+    if (['done', 'stopped', 'error'].includes(savedStatus)) {
+      setJobStatus(savedStatus)
+      return
+    }
+
     setJobStatus('running')
     setHits([])
     setStats({ probed: 0, responsive: 0, vuln_hosts: 0 })
-    setIntelBanner(null)
     esRef.current?.close()
 
     esRef.current = streamScanJob(
@@ -472,7 +485,7 @@ export default function ScanConsole() {
   return (
     <div className="scan-shell">
 
-      {/* ── GeoMap modal — uses the canonical GeoMap component from GeoMap.jsx ── */}
+      {/* ── GeoMap modal ── */}
       {geoMapOpen && geoPoints.length > 0 && (
         <GeoMap points={geoPoints} onClose={() => setGeoMapOpen(false)} />
       )}
@@ -480,13 +493,17 @@ export default function ScanConsole() {
       {/* ── Left sidebar: config ── */}
       <aside className="scan-config">
         <div className="scan-config-header">
-          <button className="back-link" onClick={() => navigate('/scan')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <FiArrowLeft size={14} /> Scan Console
+          <button
+            className="back-link"
+            onClick={() => navigate('/scan')}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            <TbArrowLeft size={14} /> Scan Console
           </button>
           <p className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--dim)' }}>
             {scanMode === 'deep'
-              ? <><FiSearch size={12} /> Deep Scan</>
-              : <><FiZap size={12} /> Wide Scan</>}
+              ? <><TbSearch size={12} /> Deep Scan</>
+              : <><TbBolt size={12} /> Wide Scan</>}
           </p>
           <h2>{countryName || 'New Scan'}</h2>
         </div>
@@ -521,7 +538,7 @@ export default function ScanConsole() {
                 )}
               </div>
               {country && (
-                <p className="hint mono" style={{ marginTop: 4 }}>
+                <p className="hint" style={{ marginTop: 4 }}>
                   results will be contributed to community intel for {country}
                 </p>
               )}
@@ -534,9 +551,9 @@ export default function ScanConsole() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span className="badge">{country}</span>
                 <span style={{ fontSize: '0.88rem' }}>{countryName}</span>
-                <FiLock size={12} style={{ color: 'var(--dim)', marginLeft: 'auto' }} />
+                <TbLock size={12} style={{ color: 'var(--dim)', marginLeft: 'auto' }} />
               </div>
-              <p className="hint mono" style={{ marginTop: 4 }}>
+              <p className="hint" style={{ marginTop: 4 }}>
                 results will be contributed to community intel for {country}
               </p>
             </div>
@@ -549,7 +566,7 @@ export default function ScanConsole() {
               value={ranges}
               onChange={e => setRanges(e.target.value)}
               rows={5}
-              placeholder="109.175.210.0/24&#10;185.132.200.0/22"
+              placeholder={'109.175.210.0/24\n185.132.200.0/22'}
             />
             {ranges.trim() && (
               <p className="hint">
@@ -567,7 +584,7 @@ export default function ScanConsole() {
                 className={`scan-mode-btn ${scanMode === 'wide' ? 'selected' : ''}`}
                 onClick={() => setScanMode('wide')}
               >
-                <span className="scan-mode-icon"><FiZap size={15} /></span>
+                <span className="scan-mode-icon"><TbBolt size={15} /></span>
                 <span className="scan-mode-title">Wide Scan</span>
               </button>
               <button
@@ -575,7 +592,7 @@ export default function ScanConsole() {
                 className={`scan-mode-btn ${scanMode === 'deep' ? 'selected' : ''}`}
                 onClick={() => setScanMode('deep')}
               >
-                <span className="scan-mode-icon"><FiSearch size={15} /></span>
+                <span className="scan-mode-icon"><TbSearch size={15} /></span>
                 <span className="scan-mode-title">Deep Scan</span>
               </button>
             </div>
@@ -598,7 +615,7 @@ export default function ScanConsole() {
             </div>
 
             {portMode === 'preset' && (
-              <p className="hint mono" style={{ marginTop: 6, fontSize: '0.68rem', color: 'var(--dim)' }}>
+              <p className="hint" style={{ marginTop: 6, fontSize: '0.68rem', color: 'var(--dim)' }}>
                 {PRESET_PORTS.join(', ')}
               </p>
             )}
@@ -609,7 +626,13 @@ export default function ScanConsole() {
                   {customPorts.map(p => (
                     <span key={p} className="port-tag">
                       {p}
-                      <button type="button" className="port-tag-remove" onClick={() => removeCustomPort(p)}>×</button>
+                      <button
+                        type="button"
+                        className="port-tag-remove"
+                        onClick={() => removeCustomPort(p)}
+                      >
+                        <TbX size={10} />
+                      </button>
                     </span>
                   ))}
                   <input
@@ -629,7 +652,9 @@ export default function ScanConsole() {
                       >
                         <span className="mono">{p.port}</span>
                         <span className="port-drop-label">{p.label}</span>
-                        {customPorts.includes(p.port) && <span style={{ marginLeft: 'auto', color: 'var(--accent)' }}>✓</span>}
+                        {customPorts.includes(p.port) && (
+                          <span style={{ marginLeft: 'auto', color: 'var(--cyan)' }}>✓</span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -638,20 +663,34 @@ export default function ScanConsole() {
             )}
           </div>
 
-          {/* Rate */}
-          <div className="field">
-            <label>Rate (pps) max 100,000</label>
-            <input
-              type="number" min={100} max={100000}
-              value={masscanRate}
-              onChange={e => setMasscanRate(Number(e.target.value))}
-            />
-            {masscanRate > 2000 && (
-              <p className="hint" style={{ color: 'var(--high)' }}>
-                ⚠ High rate may miss hosts. Recommended: 500–2000 pps.
-              </p>
-            )}
-          </div>
+          {/* Rate — wide scan only */}
+          {scanMode === 'wide' && (
+            <div className="field">
+              <label>Rate (pps) max 10,000</label>
+              <input
+                type="number" min={100} max={10000}
+                value={masscanRate}
+                onChange={e => setMasscanRate(Number(e.target.value))}
+              />
+              {masscanRate > 2000 && (
+                <p className="hint" style={{ color: 'var(--high)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <TbAlertTriangle size={13} /> High rate may miss hosts. Recommended: 500–2000 pps.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Parallelism (deep scan only) */}
+          {scanMode === 'deep' && (
+            <div className="field">
+              <label>Scan parallelism (1–500)</label>
+              <input
+                type="number" min={1} max={500}
+                value={nmapParallelism}
+                onChange={e => setNmapParallelism(Number(e.target.value))}
+              />
+            </div>
+          )}
 
           {/* CVE toggle */}
           <label className="switch-row">
@@ -661,56 +700,67 @@ export default function ScanConsole() {
 
           {/* Actions */}
           <div className="scan-actions">
-            <button type="submit" className="primary"
+            <button
+              type="submit"
+              className="primary"
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-              disabled={jobStatus === 'running'}>
+              disabled={jobStatus === 'running'}
+            >
               {jobStatus === 'running'
-                ? <><FiRefreshCw size={14} className="spin" /> Scanning…</>
-                : <><FiPlay size={14} /> Start Scan</>}
+                ? <><TbRefresh size={14} className="spin" /> Scanning…</>
+                : <><TbPlayerPlay size={14} /> Start Scan</>}
             </button>
             {jobStatus === 'running' && (
-              <button type="button" className="ghost" onClick={handleStop}>■ Stop</button>
+              <button type="button" className="ghost" onClick={handleStop}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <TbX size={14} /> Stop
+              </button>
             )}
           </div>
         </form>
 
         {/* Stats */}
         <div className="scan-stats">
-          <div className="stat-mini">
-            <span className="mono">probed</span>
-            <strong>{stats.probed.toLocaleString()}</strong>
+          <div className="scan-stat-item">
+            <span className="label">Probed</span>
+            <span className="val">{stats.probed.toLocaleString()}</span>
           </div>
-          <div className="stat-mini">
-            <span className="mono">open</span>
-            <strong style={{ color: 'var(--accent)' }}>{stats.responsive.toLocaleString()}</strong>
+          <div className="scan-stat-item">
+            <span className="label">Open</span>
+            <span className="val" style={{ color: 'var(--cyan)' }}>{stats.responsive.toLocaleString()}</span>
           </div>
-          <div className="stat-mini">
-            <span className="mono">vulns</span>
-            <strong style={{ color: 'var(--high)' }}>{stats.vuln_hosts.toLocaleString()}</strong>
+          <div className="scan-stat-item">
+            <span className="label">Vulns</span>
+            <span className="val" style={{ color: 'var(--high)' }}>{stats.vuln_hosts.toLocaleString()}</span>
           </div>
         </div>
 
         {jobId && (
-          <p className="hint mono" style={{ marginTop: 8, wordBreak: 'break-all' }}>
+          <p className="hint" style={{ marginTop: 8, wordBreak: 'break-all', fontFamily: 'var(--mono-font)', fontSize: '0.65rem' }}>
             job: {jobId}
           </p>
         )}
         {jobStatus && !['running', 'intel'].includes(jobStatus) && (
           <p className={`scan-status-badge ${jobStatus}`}>{jobStatus.toUpperCase()}</p>
         )}
-        {error && <p className="error">{error}</p>}
+        {error && (
+          <p className="error">
+            <TbAlertTriangle size={13} /> {error}
+          </p>
+        )}
       </aside>
 
       {/* ── Right panel: hit stream ── */}
-      <div className="scan-main">
+      <div className="scan-main" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
 
         {/* Intel banner */}
         {intelBanner && (
           <div className="intel-scan-banner">
-            <FiZap size={13} style={{ color: 'var(--accent)', marginRight: 6 }} />
+            <TbBolt size={13} style={{ color: 'var(--cyan)', flexShrink: 0 }} />
             Community data for {intelBanner.country}
             {intelBanner.age_days > 0 ? ` — scanned ${intelBanner.age_days}d ago` : ' — fresh'}
-            <button className="ghost small" style={{ marginLeft: 16, fontSize: '0.75rem' }}
+            <button className="ghost small" style={{ marginLeft: 16, fontSize: '0.72rem' }}
               onClick={() => {
                 setIntelBanner(null)
                 setHits([])
@@ -727,7 +777,7 @@ export default function ScanConsole() {
           <div className="hit-toolbar">
             <div className="hit-filter-fields">
               <label className="hit-filter-input">
-                <FiFilter size={14} />
+                <TbFilter size={13} style={{ flexShrink: 0 }} />
                 <input
                   value={portServiceFilter}
                   onChange={e => setPortServiceFilter(e.target.value)}
@@ -744,12 +794,14 @@ export default function ScanConsole() {
               </label>
             </div>
 
-            <label className="hit-filter-toggle" title="Show only hosts with banner/software/CVEs">
+            <label className="hit-filter-toggle" title="Hide silent hosts (no open ports)">
               <input type="checkbox" checked={onlyFindings}
                 onChange={e => { setOnlyFindings(e.target.checked); setSelectedIPs(new Set()) }} />
               <span>Only findings</span>
               <span className="hit-filter-count">
-                {onlyFindings ? `${visibleHits.length} / ${hits.length}` : `all ${hits.length}`}
+                {onlyFindings
+                  ? `${visibleHits.length} / ${hits.length}`
+                  : `all ${hits.length}`}
               </span>
             </label>
 
@@ -761,9 +813,12 @@ export default function ScanConsole() {
                 <button className="ghost small" onClick={clearSelection}>
                   Clear ({selectedIPs.size})
                 </button>
-                <button className="primary small" onClick={rescanSelected}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <FiPlay size={11} /> Re-scan {selectedIPs.size} IP{selectedIPs.size > 1 ? 's' : ''}
+                <button
+                  className="primary small"
+                  onClick={rescanSelected}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                >
+                  <TbPlayerPlay size={11} /> Re-scan {selectedIPs.size} IP{selectedIPs.size > 1 ? 's' : ''}
                 </button>
               </>
             )}
@@ -771,24 +826,32 @@ export default function ScanConsole() {
             <div className="hit-toolbar-sep" />
 
             <div className="hit-export-group">
-              <button className="ghost small" onClick={() => exportResults('csv')}>
-                <FiDownload size={13} /> CSV
+              <button className="ghost small" onClick={() => exportResults('csv')}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <TbDownload size={13} /> CSV
               </button>
-              <button className="ghost small" onClick={() => exportResults('json')}>
-                <FiDownload size={13} /> JSON
+              <button className="ghost small" onClick={() => exportResults('json')}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <TbDownload size={13} /> JSON
               </button>
             </div>
 
-            <button className="ghost small" onClick={buildGeoMap} disabled={geoLoading}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <FiGlobe size={13} />
+            <button
+              className="ghost small"
+              onClick={buildGeoMap}
+              disabled={geoLoading}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
+            >
+              <TbWorld size={13} />
               {geoLoading ? 'Mapping…' : 'Geo map'}
             </button>
           </div>
         )}
 
         {geoError && (
-          <p className="error" style={{ margin: '8px 16px' }}>{geoError}</p>
+          <p className="error" style={{ margin: '8px 16px' }}>
+            <TbAlertTriangle size={13} /> {geoError}
+          </p>
         )}
 
         {/* Hit stream */}
@@ -796,7 +859,7 @@ export default function ScanConsole() {
           {hits.length === 0 && (
             <div className="hit-empty">
               {jobStatus === 'running'
-                ? <><span className="pulse-dot" /> waiting for open ports…</>
+                ? <><span className="pulse-dot" /> Waiting for open ports…</>
                 : 'No hits yet. Configure and start a scan, or load community intel from the dashboard.'}
             </div>
           )}
@@ -810,112 +873,133 @@ export default function ScanConsole() {
             }
 
             return Object.entries(grouped).map(([ip, ports]) => {
-              const isActive   = activeHit === ip
-              const isSelected = selectedIPs.has(ip)
-              const allCves    = ports.flatMap(p => p.cves || [])
+              const isActive    = activeHit === ip
+              const isSelected  = selectedIPs.has(ip)
+              const allCves     = ports.flatMap(p => p.cves || [])
               const topCveScore = allCves.length
                 ? Math.max(...allCves.map(c => parseFloat(c.score || '0') || 0))
                 : 0
 
               return (
-                <div key={ip}
+                <div
+                  key={ip}
                   className={`hit-row ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''} ${topCveScore > 0 ? 'has-cve' : ''}`}
-                  onClick={() => setActiveHit(isActive ? null : ip)}>
-
-                  <div className="hit-row-main">
-                    <input type="checkbox" className="hit-checkbox"
+                  onClick={() => setActiveHit(isActive ? null : ip)}
+                >
+                  <div className="hit-row-check" onClick={e => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
                       checked={isSelected}
-                      onClick={e => e.stopPropagation()}
-                      onChange={() => toggleSelectIP(ip)} />
-
-                    <span className="status-dot open" />
-
-                    <span className="mono hit-ip"
-                      style={{ color: 'var(--accent)', fontWeight: 600, minWidth: 130 }}>
-                      {ip}
-                    </span>
-
-                    <span className="hit-ports">
-                      {ports.every(p => p.status === 'silent')
-                        ? <span className="hint" style={{ fontSize: '0.72rem', marginLeft: 4 }}>no response</span>
-                        : ports.map((p, pi) => {
-                            const hasData = !!(p.banner || p.software || p.cves?.length)
-                            return (
-                              <span key={pi}
-                                className={`port-chip ${hasData ? 'port-chip-hit' : ''}`}
-                                title={p.software || (p.banner ? p.banner.slice(0, 60) : '')}>
-                                :{p.port}
-                                {p.software && (
-                                  <span className="port-chip-svc"> {p.software.split('/')[0].slice(0, 12)}</span>
-                                )}
-                              </span>
-                            )
-                          })
-                      }
-                    </span>
-
-                    {topCveScore > 0 && (
-                      <span className="cve-badge" style={{ background: severityColor(topCveScore) }}>
-                        CVE {topCveScore}
-                      </span>
-                    )}
-
-                    {allCves.length > 0 && (
-                      <span className="hint mono" style={{ fontSize: '0.7rem', marginLeft: 4 }}>
-                        {allCves.length} vuln{allCves.length !== 1 ? 's' : ''}
-                      </span>
-                    )}
+                      onChange={() => toggleSelectIP(ip)}
+                    />
                   </div>
 
-                  {isActive && (
-                    <div className="hit-detail">
-                      {ports.map((p, pi) => (
-                        <div key={pi} className="hit-port-section">
-                          <div className="hit-port-section-header">
-                            <span className="mono" style={{ color: 'var(--accent)' }}>:{p.port}</span>
-                            {p.software && <span className="hit-software">{p.software}</span>}
-                            {!p.banner && !p.software && (
-                              <span className="hint" style={{ fontSize: '0.72rem' }}>no banner</span>
+                  <div className="hit-row-body">
+                    <div className="hit-row-main">
+                      <span className="mono hit-ip">{ip}</span>
+
+                      <span className="hit-flag" aria-hidden>{countryFlag(country)}</span>
+
+                      <div className="port-chip-row">
+                        {ports.every(p => p.status === 'silent')
+                          ? <span className="hint" style={{ fontSize: '0.72rem' }}>no response</span>
+                          : ports.map((p, pi) => {
+                              const hasData = !!(p.banner || p.software || p.cves?.length)
+                              return (
+                                <span
+                                  key={pi}
+                                  className={`port-chip ${hasData ? 'port-chip-hit' : ''}`}
+                                  title={p.software || (p.banner ? p.banner.slice(0, 60) : '')}
+                                >
+                                  :{p.port}
+                                  {p.software && (
+                                    <span className="port-chip-svc"> {p.software.split('/')[0].slice(0, 12)}</span>
+                                  )}
+                                </span>
+                              )
+                            })
+                        }
+                      </div>
+
+                      {topCveScore > 0 && (
+                        <span
+                          className="cve-badge"
+                          style={{
+                            background: severityColor(topCveScore),
+                            color: '#000',
+                            fontFamily: 'var(--mono-font)',
+                            fontSize: '0.65rem',
+                            fontWeight: 700,
+                            padding: '2px 7px',
+                            borderRadius: 2,
+                            marginLeft: 4,
+                          }}
+                        >
+                          CVE {topCveScore}
+                        </span>
+                      )}
+
+                      {allCves.length > 0 && (
+                        <span className="hint" style={{ fontFamily: 'var(--mono-font)', fontSize: '0.7rem', marginLeft: 4 }}>
+                          {allCves.length} vuln{allCves.length !== 1 ? 's' : ''}
+                        </span>
+                      )}
+                    </div>
+
+                    {isActive && (
+                      <div className="hit-detail">
+                        {ports.map((p, pi) => (
+                          <div key={pi} className="hit-port-section">
+                            <div className="hit-port-section-header">
+                              <span className="mono" style={{ color: 'var(--cyan)' }}>:{p.port}</span>
+                              {p.software && <span className="hit-software">{p.software}</span>}
+                              {!p.banner && !p.software && (
+                                <span className="hint" style={{ fontSize: '0.72rem' }}>no banner</span>
+                              )}
+                            </div>
+                            {p.banner && <pre className="banner-pre">{p.banner}</pre>}
+                            {p.version_info?.length > 0 && (
+                              <div className="version-tags">
+                                {p.version_info.map((vi, j) => (
+                                  <span key={j} className="version-tag">
+                                    <span className="mono">{vi.label}</span> {vi.value}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {p.cves?.length > 0 && (
+                              <div className="cve-detail-list">
+                                {p.cves.map((cve, j) => (
+                                  <div key={j} className="cve-detail-item">
+                                    <div className="cve-detail-head">
+                                      <span className="badge strong">{cve.id}</span>
+                                      <span
+                                        className="score-pill"
+                                        style={{ color: severityColor(cve.score) }}
+                                      >
+                                        CVSS {cve.score} — {cve.severity}
+                                      </span>
+                                    </div>
+                                    <p className="cve-desc">{cve.desc}</p>
+                                  </div>
+                                ))}
+                              </div>
                             )}
                           </div>
-                          {p.banner && <pre className="banner-pre">{p.banner}</pre>}
-                          {p.version_info?.length > 0 && (
-                            <div className="version-tags">
-                              {p.version_info.map((vi, j) => (
-                                <span key={j} className="version-tag">
-                                  <span className="mono">{vi.label}</span> {vi.value}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                          {p.cves?.length > 0 && (
-                            <div className="cve-detail-list">
-                              {p.cves.map((cve, j) => (
-                                <div key={j} className="cve-detail-item">
-                                  <div className="cve-detail-head">
-                                    <span className="badge strong">{cve.id}</span>
-                                    <span className="score-pill"
-                                      style={{ color: severityColor(cve.score) }}>
-                                      CVSS {cve.score} — {cve.severity}
-                                    </span>
-                                  </div>
-                                  <p className="cve-desc">{cve.desc}</p>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                      <button className="ip-detail-link"
-                        onClick={e => {
-                          e.stopPropagation()
-                          navigate('/ip/' + encodeURIComponent(ip), { state: { hit: ports[0] } })
-                        }}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        View IP detail <FiArrowUpRight size={13} />
-                      </button>
-                    </div>
-                  )}
+                        ))}
+                        <button
+                          className="ip-detail-link"
+                          onClick={e => {
+                            e.stopPropagation()
+                            window.open('/ip/' + encodeURIComponent(ip), '_blank')
+                          }}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4 }}
+                        >
+                          View IP detail <TbArrowUpRight size={13} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )
             })

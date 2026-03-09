@@ -177,12 +177,10 @@ export default function RangeLookup({ rangeResult, setRangeResult, selectedRange
             <p className="hint">All selected by default.</p>
           </div>
 
-          <div className="switch-row">
-            <label>
-              <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
-              Force refresh cache
-            </label>
-          </div>
+          <label className="switch-row">
+            <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
+            Force refresh cache
+          </label>
 
           <button type="submit" className="primary" disabled={loading}>
             {loading ? 'Pulling ranges...' : 'Pull Ranges'}
@@ -215,7 +213,7 @@ export default function RangeLookup({ rangeResult, setRangeResult, selectedRange
             </div>
 
             <div className="range-select-bar">
-              <label className="range-select-all-label">
+              <label className="switch-row">
                 <input
                   type="checkbox"
                   checked={allChecked}

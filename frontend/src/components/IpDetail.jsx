@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
-import { FiAlertTriangle, FiArrowUpRight, FiCamera } from 'react-icons/fi'
+import { TbArrowLeft, TbAlertTriangle, TbArrowUpRight, TbCamera } from 'react-icons/tb'
 import { fetchIpInfo, fetchHttpScreenshot } from '../api'
 
 function severityColor(score) {
@@ -34,34 +34,31 @@ export default function IpDetail() {
     if (hitData) return
     let attempts = 0
     const poll = setInterval(() => {
-        console.log('polling... ip param is:', ip)
-        console.log('localStorage keys:', Object.keys(localStorage))
-        for (let i = 0; i < localStorage.length; i++) {
+      for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i)
-        console.log('checking key:', key, '| starts with:', 'hit_' + ip + '_')
         if (key && key.startsWith('hit_' + ip + '_')) {
-            try {
+          try {
             const parsed = JSON.parse(localStorage.getItem(key))
             if (parsed) {
-                setHitData(parsed)
-                clearInterval(poll)
-                return
+              setHitData(parsed)
+              clearInterval(poll)
+              return
             }
-            } catch { /* ignore */ }
+          } catch { /* ignore */ }
         }
-        }
-        attempts++
-        if (attempts >= 10) clearInterval(poll)
+      }
+      attempts++
+      if (attempts >= 10) clearInterval(poll)
     }, 50)
     return () => clearInterval(poll)
   }, [ip, hitData])
 
-  const [geo, setGeo] = useState(null)
-  const [geoError, setGeoError] = useState('')
-  const [geoLoading, setGeoLoading] = useState(true)
-  const [shot, setShot] = useState(null)
-  const [shotLoading, setShotLoading] = useState(false)
-  const [shotError, setShotError] = useState('')
+  const [geo,           setGeo]           = useState(null)
+  const [geoError,      setGeoError]      = useState('')
+  const [geoLoading,    setGeoLoading]    = useState(true)
+  const [shot,          setShot]          = useState(null)
+  const [shotLoading,   setShotLoading]   = useState(false)
+  const [shotError,     setShotError]     = useState('')
   const [shotModalOpen, setShotModalOpen] = useState(false)
 
   useEffect(() => {
@@ -77,14 +74,14 @@ export default function IpDetail() {
       .finally(() => setGeoLoading(false))
   }, [ip])
 
-  const canScreenshot = hitData && [80, 443].includes(hitData.port)
+  const canScreenshot = hitData && [80, 443, 8080, 8443, 8000, 8008, 8888, 3000, 5000].includes(hitData.port)
 
   const grabScreenshot = async () => {
     if (!canScreenshot) return
     setShotLoading(true)
     setShotError('')
     try {
-      const scheme = hitData.port === 443 ? 'https' : 'http'
+      const scheme = [443, 8443].includes(hitData.port) ? 'https' : 'http'
       const data = await fetchHttpScreenshot({ ip, port: hitData.port, scheme, full_page: false })
       if (data.error) throw new Error(data.error)
       setShot({ ...data, scheme })
@@ -113,21 +110,44 @@ export default function IpDetail() {
       <div className="ip-detail-card">
 
         <div className="ip-detail-header">
-          <button className="back-link" onClick={() => {
-            if (window.history.length > 1) {
-              navigate(-1)
-            } else {
-              navigate('/scan')
-            }
-          }}>
-            &larr; Back
+          <button
+            className="back-link"
+            onClick={() => {
+              if (window.opener) window.close()
+              else if (window.history.length > 1) navigate(-1)
+              else navigate('/scan')
+            }}
+          >
+            <TbArrowLeft size={13} /> Back
           </button>
-          <p className="mono eyebrow">IP Intelligence</p>
+          <p className="eyebrow" style={{
+            fontFamily: 'var(--mono-font)',
+            fontSize: '0.65rem',
+            color: 'var(--cyan)',
+            letterSpacing: '0.18em',
+            textTransform: 'uppercase',
+            marginTop: 4,
+            marginBottom: 8
+          }}>
+            IP Intelligence
+          </p>
           <h1 className="ip-title">{ip}</h1>
           {hitData && (
             <div className="ip-hit-meta">
-              <span className="status-dot open" style={{ display: 'inline-block', marginRight: 6 }} />
-              <span className="mono" style={{ fontSize: '0.82rem', color: 'var(--accent)' }}>
+              <span
+                style={{
+                  display: 'inline-block',
+                  width: 7,
+                  height: 7,
+                  borderRadius: '50%',
+                  background: 'var(--low)',
+                  boxShadow: '0 0 6px var(--low)',
+                  marginRight: 8,
+                  flexShrink: 0,
+                }}
+                aria-hidden
+              />
+              <span className="mono" style={{ fontSize: '0.82rem', color: 'var(--cyan)' }}>
                 port {hitData.port} open
               </span>
               {hitData.software && (
@@ -137,19 +157,20 @@ export default function IpDetail() {
           )}
         </div>
 
+        {/* ── Geolocation / ASN ── */}
         <div className="ip-section">
-          <p className="ip-section-title mono">Geolocation / ASN</p>
+          <p className="ip-section-title">Geolocation / ASN</p>
           {geoLoading && <p className="hint">Resolving…</p>}
           {geoError && (
-            <p className="error" style={{ marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <FiAlertTriangle aria-label="warning" /> {geoError}
+            <p className="error" style={{ marginTop: 8 }}>
+              <TbAlertTriangle size={14} aria-label="warning" /> {geoError}
             </p>
           )}
           {geo && (
             <div className="ip-detail-grid">
               {geoRows.map(([label, value]) => (
                 <div className="ip-field" key={label}>
-                  <span className="ip-label mono">{label}</span>
+                  <span className="ip-label">{label}</span>
                   <span className="ip-value">{value}</span>
                 </div>
               ))}
@@ -157,10 +178,11 @@ export default function IpDetail() {
           )}
         </div>
 
+        {/* ── Banner ── */}
         {hitData && hitData.banner && (
           <div className="ip-section">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-              <p className="ip-section-title mono" style={{ marginBottom: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+              <p className="ip-section-title" style={{ margin: 0 }}>
                 Banner — port {hitData.port}
               </p>
               {canScreenshot && (
@@ -171,34 +193,39 @@ export default function IpDetail() {
                   disabled={shotLoading}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                 >
-                  <FiCamera size={12} />
+                  <TbCamera size={12} />
                   {shotLoading ? 'Capturing…' : 'Screenshot'}
                 </button>
               )}
               {shot && shot.title && (
-                <span className="hint" style={{ color: 'var(--accent)' }}>
+                <span className="hint" style={{ color: 'var(--cyan)' }}>
                   {shot.title} {shot.status ? `(${shot.status})` : ''}
                 </span>
               )}
-              {shotError && <span className="error">{shotError}</span>}
+              {shotError && (
+                <span className="error" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <TbAlertTriangle size={12} /> {shotError}
+                </span>
+              )}
             </div>
             <pre className="banner-pre">{hitData.banner}</pre>
             {shot?.screenshot && (
-              <div className="http-shot" style={{ marginTop: 10 }}>
+              <div className="screenshot-wrap" style={{ marginTop: 12 }}>
                 <img
                   src={`data:image/png;base64,${shot.screenshot}`}
                   alt="HTTP screenshot"
                   onClick={() => setShotModalOpen(true)}
-                  style={{ cursor: 'zoom-in' }}
+                  style={{ cursor: 'zoom-in', width: '100%', display: 'block' }}
                 />
               </div>
             )}
           </div>
         )}
 
+        {/* ── Detected software ── */}
         {hitData && hitData.version_info && hitData.version_info.length > 0 && (
           <div className="ip-section">
-            <p className="ip-section-title mono">Detected software</p>
+            <p className="ip-section-title">Detected software</p>
             <div className="version-tags">
               {hitData.version_info.map((vi, i) => (
                 <span key={i} className="version-tag">
@@ -209,9 +236,10 @@ export default function IpDetail() {
           </div>
         )}
 
+        {/* ── CVEs ── */}
         {hitData && hitData.cves && hitData.cves.length > 0 && (
           <div className="ip-section">
-            <p className="ip-section-title mono">CVEs ({hitData.cves.length})</p>
+            <p className="ip-section-title">CVEs ({hitData.cves.length})</p>
             <div className="cve-detail-list">
               {hitData.cves.map((cve, i) => (
                 <div key={i} className="cve-detail-item">
@@ -222,14 +250,14 @@ export default function IpDetail() {
                     </span>
                   </div>
                   <p className="cve-desc">{cve.desc}</p>
-                  
-                  <a href={'https://nvd.nist.gov/vuln/detail/' + cve.id}
+                  <a
+                    href={'https://nvd.nist.gov/vuln/detail/' + cve.id}
                     target="_blank"
                     rel="noreferrer"
                     className="ip-detail-link"
-                    style={{ fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 6 }}
                   >
-                    NVD <FiArrowUpRight aria-hidden />
+                    NVD <TbArrowUpRight size={12} aria-hidden />
                   </a>
                 </div>
               ))}
@@ -237,8 +265,9 @@ export default function IpDetail() {
           </div>
         )}
 
+        {/* ── Pivot links ── */}
         <div className="ip-section">
-          <p className="ip-section-title mono">Pivot to</p>
+          <p className="ip-section-title">Pivot to</p>
           <div className="ip-actions">
             {pivotLinks(ip).map(({ href, label }) => (
               <a
@@ -249,17 +278,38 @@ export default function IpDetail() {
                 className="ghost small"
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
               >
-                {label} <FiArrowUpRight aria-hidden />
+                {label} <TbArrowUpRight size={12} aria-hidden />
               </a>
             ))}
           </div>
         </div>
 
       </div>
+
+      {/* ── Screenshot modal ── */}
       {shotModalOpen && shot?.screenshot && (
-        <div className="shot-modal-backdrop" onClick={() => setShotModalOpen(false)}>
-          <div className="shot-modal" onClick={(e) => e.stopPropagation()}>
-            <img src={`data:image/png;base64,${shot.screenshot}`} alt="HTTP screenshot enlarged" />
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.85)',
+            zIndex: 600,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'zoom-out',
+          }}
+          onClick={() => setShotModalOpen(false)}
+        >
+          <div
+            style={{ maxWidth: '90vw', maxHeight: '90vh', overflow: 'auto' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <img
+              src={`data:image/png;base64,${shot.screenshot}`}
+              alt="HTTP screenshot enlarged"
+              style={{ display: 'block', maxWidth: '100%' }}
+            />
           </div>
         </div>
       )}
