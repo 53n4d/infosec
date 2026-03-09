@@ -638,6 +638,11 @@ button.ghost.small { padding: 6px 12px; font-size: 0.78rem; }
   50% { opacity: 0.4; transform: scale(0.8); }
 }
 
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 /* ── CVE Probe card ──────────────────────────────────────── */
 .cve-list { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
 .cve-item {
@@ -1521,3 +1526,268 @@ button.ghost.small { padding: 6px 12px; font-size: 0.78rem; }
 /* spinning icon for scanning state */
 @keyframes spin { to { transform: rotate(360deg) } }
 .spin { animation: spin 1s linear infinite; }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GeoMap modal
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes gm-fadein {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Backdrop */
+.gm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.78);
+  backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Modal shell */
+.gm-modal {
+  width: 92vw;
+  max-width: 1240px;
+  height: 86vh;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(0, 255, 136, 0.07);
+  animation: gm-fadein 0.18s ease;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.gm-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.gm-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 180px;
+}
+
+.gm-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.gm-title {
+  font-size: 0.75rem;
+  color: var(--accent);
+  letter-spacing: 3px;
+}
+
+.gm-sub {
+  font-size: 0.68rem;
+  color: var(--dim);
+}
+
+.gm-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.gm-badge {
+  font-family: var(--mono-font);
+  font-size: 0.68rem;
+  color: var(--dim);
+  border: 1px solid var(--border2);
+  padding: 2px 8px;
+  border-radius: var(--radius);
+}
+
+.gm-badge--port {
+  color: var(--accent);
+  border-color: rgba(0, 255, 136, 0.25);
+}
+
+.gm-close {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.gm-close:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Body ────────────────────────────────────────────────────────────────── */
+.gm-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Map canvas ──────────────────────────────────────────────────────────── */
+.gm-map-wrap {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #050d14;
+}
+
+.gm-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  user-select: none;
+}
+
+/* ── Tooltip ─────────────────────────────────────────────────────────────── */
+.gm-tooltip {
+  position: absolute;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 10px 13px;
+  pointer-events: none;
+  z-index: 10;
+  min-width: 190px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.65);
+}
+
+.gm-tip-ip {
+  font-size: 0.88rem;
+  color: var(--accent);
+  font-weight: 700;
+  margin-bottom: 7px;
+}
+
+.gm-tip-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.72rem;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.gm-tip-label {
+  font-size: 0.64rem;
+  color: var(--dim);
+  letter-spacing: 1px;
+  min-width: 55px;
+}
+
+.gm-tip-soft {
+  color: var(--dim);
+  margin-left: 6px;
+}
+
+.gm-tip-dim  { color: var(--dim); }
+.gm-tip-coords { color: var(--dim); }
+
+/* ── Zoom hint ───────────────────────────────────────────────────────────── */
+.gm-hint {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.64rem;
+  color: var(--border2);
+  pointer-events: none;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  margin: 0;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+.gm-sidebar {
+  width: 224px;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.gm-sidebar-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.gm-sidebar-search {
+  margin: 8px 8px 4px;
+  width: calc(100% - 16px);
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--mono-font);
+  font-size: 0.72rem;
+  padding: 5px 9px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.gm-sidebar-search:focus {
+  border-color: var(--accent);
+  box-shadow: var(--glow);
+}
+
+.gm-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.gm-sidebar-list::-webkit-scrollbar       { width: 4px; }
+.gm-sidebar-list::-webkit-scrollbar-track { background: transparent; }
+.gm-sidebar-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* Sidebar rows */
+.gm-sidebar-row {
+  padding: 7px 10px 7px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.gm-sidebar-row--hovered  { background: var(--bg2); }
+
+.gm-sidebar-row--selected {
+  background: rgba(0, 255, 136, 0.06);
+  border-left-color: var(--accent);
+}
+
+.gm-sidebar-row-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.gm-sidebar-ip   { font-size: 0.76rem; color: var(--text); }
+.gm-sidebar-port { font-size: 0.68rem; color: var(--accent); }
+.gm-sidebar-meta { font-size: 0.65rem; color: var(--dim); margin-top: 2px; }
+.gm-sidebar-sw   { font-size: 0.62rem; color: var(--dim); margin-top: 1px; opacity: 0.7; }
