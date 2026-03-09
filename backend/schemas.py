@@ -77,3 +77,32 @@ class JobStatus(BaseModel):
     vuln_hosts: int
     hits: List[ScanHit]
     error: Optional[str] = None
+
+
+class HttpInspectRequest(BaseModel):
+    ip: str
+    port: int = 80
+    scheme: str = "http"  # http | https
+    path: str = "/"
+
+
+class HttpInspectResponse(BaseModel):
+    title: Optional[str] = None
+    status: Optional[int] = None
+    screenshot: Optional[str] = None  # base64 PNG if captured (not implemented yet)
+    error: Optional[str] = None
+
+
+class HttpScreenshotRequest(BaseModel):
+    ip: str
+    port: int = 80
+    scheme: str = "http"  # http | https
+    path: str = "/"
+    full_page: bool = False
+
+
+class HttpScreenshotResponse(BaseModel):
+    title: Optional[str] = None
+    status: Optional[int] = None
+    screenshot: Optional[str] = None  # base64 PNG
+    error: Optional[str] = None

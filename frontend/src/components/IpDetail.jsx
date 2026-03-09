@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
-import { FiAlertTriangle, FiArrowUpRight } from 'react-icons/fi'
-import { fetchIpInfo } from '../api'
+import { FiAlertTriangle, FiArrowUpRight, FiCamera } from 'react-icons/fi'
+import { fetchIpInfo, fetchHttpScreenshot } from '../api'
 
 function severityColor(score) {
   const n = parseFloat(score)
@@ -59,6 +59,10 @@ export default function IpDetail() {
   const [geo, setGeo] = useState(null)
   const [geoError, setGeoError] = useState('')
   const [geoLoading, setGeoLoading] = useState(true)
+  const [shot, setShot] = useState(null)
+  const [shotLoading, setShotLoading] = useState(false)
+  const [shotError, setShotError] = useState('')
+  const [shotModalOpen, setShotModalOpen] = useState(false)
 
   useEffect(() => {
     if (!ip) return
@@ -72,6 +76,25 @@ export default function IpDetail() {
       .catch((err) => setGeoError(err.message))
       .finally(() => setGeoLoading(false))
   }, [ip])
+
+  const canScreenshot = hitData && [80, 443].includes(hitData.port)
+
+  const grabScreenshot = async () => {
+    if (!canScreenshot) return
+    setShotLoading(true)
+    setShotError('')
+    try {
+      const scheme = hitData.port === 443 ? 'https' : 'http'
+      const data = await fetchHttpScreenshot({ ip, port: hitData.port, scheme, full_page: false })
+      if (data.error) throw new Error(data.error)
+      setShot({ ...data, scheme })
+    } catch (e) {
+      setShotError(e.message)
+      setShot(null)
+    } finally {
+      setShotLoading(false)
+    }
+  }
 
   const geoRows = geo ? [
     ['Country',     geo.country + ' (' + geo.countryCode + ')'],
@@ -136,8 +159,40 @@ export default function IpDetail() {
 
         {hitData && hitData.banner && (
           <div className="ip-section">
-            <p className="ip-section-title mono">Banner — port {hitData.port}</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <p className="ip-section-title mono" style={{ marginBottom: 0 }}>
+                Banner — port {hitData.port}
+              </p>
+              {canScreenshot && (
+                <button
+                  type="button"
+                  className="ghost small"
+                  onClick={grabScreenshot}
+                  disabled={shotLoading}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                >
+                  <FiCamera size={12} />
+                  {shotLoading ? 'Capturing…' : 'Screenshot'}
+                </button>
+              )}
+              {shot && shot.title && (
+                <span className="hint" style={{ color: 'var(--accent)' }}>
+                  {shot.title} {shot.status ? `(${shot.status})` : ''}
+                </span>
+              )}
+              {shotError && <span className="error">{shotError}</span>}
+            </div>
             <pre className="banner-pre">{hitData.banner}</pre>
+            {shot?.screenshot && (
+              <div className="http-shot" style={{ marginTop: 10 }}>
+                <img
+                  src={`data:image/png;base64,${shot.screenshot}`}
+                  alt="HTTP screenshot"
+                  onClick={() => setShotModalOpen(true)}
+                  style={{ cursor: 'zoom-in' }}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -201,6 +256,13 @@ export default function IpDetail() {
         </div>
 
       </div>
+      {shotModalOpen && shot?.screenshot && (
+        <div className="shot-modal-backdrop" onClick={() => setShotModalOpen(false)}>
+          <div className="shot-modal" onClick={(e) => e.stopPropagation()}>
+            <img src={`data:image/png;base64,${shot.screenshot}`} alt="HTTP screenshot enlarged" />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

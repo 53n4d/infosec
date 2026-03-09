@@ -127,3 +127,17 @@ export async function fetchIpInfo(ip) {
   }
   throw new Error('All geo sources failed: ' + lastErr?.message)
 }
+
+export async function fetchHttpInspect({ ip, port, scheme = 'http', path = '/' }) {
+  return request('/http/inspect', {
+    method: 'POST',
+    body: JSON.stringify({ ip, port, scheme, path }),
+  })
+}
+
+export async function fetchHttpScreenshot({ ip, port, scheme = 'http', path = '/', full_page = false }) {
+  return request('/http/screenshot', {
+    method: 'POST',
+    body: JSON.stringify({ ip, port, scheme, path, full_page }),
+  })
+}

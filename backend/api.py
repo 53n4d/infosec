@@ -1,8 +1,11 @@
 import asyncio
+import base64
+import http.client
 import ipaddress
 import json
 import os
 import re
+import ssl
 import sys
 import tempfile
 import uuid
@@ -26,6 +29,10 @@ from backend.schemas import (
     ScanResponse,
     ScanHit,
     JobStatus,
+    HttpInspectRequest,
+    HttpInspectResponse,
+    HttpScreenshotRequest,
+    HttpScreenshotResponse,
 )
 
 app = FastAPI(
@@ -180,6 +187,60 @@ async def stream_scan(job_id: str):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _http_inspect_sync(req: HttpInspectRequest) -> HttpInspectResponse:
+    conn = None
+    try:
+        context = ssl._create_unverified_context() if req.scheme == "https" else None
+        conn_class = http.client.HTTPSConnection if req.scheme == "https" else http.client.HTTPConnection
+        conn = conn_class(req.ip, req.port, timeout=5, context=context) if context else conn_class(req.ip, req.port, timeout=5)
+        conn.request("GET", req.path or "/")
+        resp = conn.getresponse()
+        body = resp.read(204800)  # limit to 200KB
+        title_match = re.search(rb"<title>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
+        title = title_match.group(1).decode(errors="ignore").strip() if title_match else None
+        return HttpInspectResponse(title=title, status=resp.status)
+    except Exception as exc:  # noqa: BLE001
+        return HttpInspectResponse(error=str(exc))
+    finally:
+        try:
+            conn.close()  # type: ignore[union-attr]
+        except Exception:
+            pass
+
+
+@app.post("/http/inspect", response_model=HttpInspectResponse)
+async def http_inspect(payload: HttpInspectRequest):
+    return await asyncio.to_thread(_http_inspect_sync, payload)
+
+
+@app.post("/http/screenshot", response_model=HttpScreenshotResponse)
+async def http_screenshot(payload: HttpScreenshotRequest):
+    try:
+        from playwright.async_api import async_playwright  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Playwright not available: {exc}") from exc
+
+    async def grab():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(args=["--no-sandbox"])
+            page = await browser.new_page()
+            url = f"{payload.scheme}://{payload.ip}:{payload.port}{payload.path or '/'}"
+            resp = await page.goto(url, wait_until="domcontentloaded", timeout=8000)
+            title = await page.title()
+            raw = await page.screenshot(full_page=payload.full_page, type="png")
+            await browser.close()
+            return HttpScreenshotResponse(
+                title=title or None,
+                status=resp.status if resp else None,
+                screenshot=base64.b64encode(raw).decode("ascii") if isinstance(raw, (bytes, bytearray)) else None,
+            )
+
+    try:
+        return await grab()
+    except Exception as exc:  # noqa: BLE001
+        return HttpScreenshotResponse(error=str(exc))
 
 
 CVE_PROBE_PORTS = {21, 22, 23, 25, 80, 443, 445, 3306, 3389, 5432, 6379, 8080, 8443, 9200, 27017}

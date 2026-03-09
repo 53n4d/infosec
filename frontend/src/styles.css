@@ -1215,6 +1215,54 @@ button.ghost.small { padding: 6px 12px; font-size: 0.78rem; }
   border-bottom: 1px solid var(--border);
   background: var(--bg2);
   font-size: 0.82rem;
+  flex-wrap: wrap;
+}
+
+.hit-filter-fields {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.hit-filter-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+.hit-filter-input input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  min-width: 200px;
+}
+
+.hit-filter-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+.hit-filter-select select {
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.hit-export-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .hit-filter-toggle {
@@ -1249,6 +1297,78 @@ button.ghost.small { padding: 6px 12px; font-size: 0.78rem; }
   height: 18px;
   background: var(--border2);
   flex-shrink: 0;
+}
+
+.geo-map-wrap {
+  padding: 12px 16px 4px;
+}
+
+.geo-map {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.geo-map svg {
+  width: 100%;
+  display: block;
+}
+
+.geo-map-meta {
+  padding: 8px 12px;
+  font-size: 0.78rem;
+  color: var(--dim);
+  border-top: 1px solid var(--border);
+}
+
+.http-inspect {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.http-shot {
+  width: 240px;
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+}
+
+.http-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.shot-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.shot-modal {
+  max-width: 90vw;
+  max-height: 90vh;
+  border: 1px solid var(--border2);
+  background: var(--bg2);
+  padding: 12px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.55);
+  border-radius: 8px;
+}
+
+.shot-modal img {
+  display: block;
+  max-width: 100%;
+  max-height: 80vh;
 }
 
 /* ── Hit row selection ───────────────────────────────────────────────── */

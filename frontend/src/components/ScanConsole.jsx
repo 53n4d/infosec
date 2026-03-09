@@ -1,7 +1,19 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { FiAlertTriangle, FiArrowUpRight, FiLock, FiPlay, FiRefreshCw, FiSearch, FiShare2, FiZap } from 'react-icons/fi'
-import { startScan, streamScanJob, fetchCountries } from '../api'
+import {
+  FiAlertTriangle,
+  FiArrowUpRight,
+  FiDownload,
+  FiFilter,
+  FiGlobe,
+  FiLock,
+  FiPlay,
+  FiRefreshCw,
+  FiSearch,
+  FiShare2,
+  FiZap,
+} from 'react-icons/fi'
+import { startScan, streamScanJob, fetchCountries, fetchIpInfo } from '../api'
 import { contributeCountryIntel } from '../intel'
 
 const PRESET_PORTS = [21, 22, 23, 25, 80, 443, 445, 3306, 3389, 5432, 6379, 8080, 8443, 9200, 27017]
@@ -78,6 +90,80 @@ function severityColor(score) {
   return 'var(--low)'
 }
 
+function GeoMap({ points }) {
+  const width = 960
+  const height = 520
+  const margin = 36
+
+  const jitter = (ip) => {
+    let h = 0
+    for (let i = 0; i < ip.length; i++) h = (h * 31 + ip.charCodeAt(i)) >>> 0
+    const angle = (h % 360) * (Math.PI / 180)
+    const r = 0.25 + ((h >> 10) % 20) / 100 // 0.25°–0.45°
+    return { dx: Math.cos(angle) * r, dy: Math.sin(angle) * r }
+  }
+
+  // Bounding box with padding
+  const lats = points.map(p => p.lat)
+  const lons = points.map(p => p.lon)
+  const minLat = Math.min(...lats, -85)
+  const maxLat = Math.max(...lats, 85)
+  const minLon = Math.min(...lons, -179)
+  const maxLon = Math.max(...lons, 179)
+  const latSpan = Math.max(10, maxLat - minLat)
+  const lonSpan = Math.max(10, maxLon - minLon)
+
+  const project = (lat, lon) => {
+    const x = ((lon - minLon) / lonSpan) * (width - 2 * margin) + margin
+    const y = ((maxLat - lat) / latSpan) * (height - 2 * margin) + margin
+    return { x, y }
+  }
+
+  return (
+    <div className="geo-map">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Discovered hosts map">
+        <defs>
+          <linearGradient id="geo-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="rgba(0,255,136,0.10)" />
+            <stop offset="100%" stopColor="rgba(0,0,0,0.65)" />
+          </linearGradient>
+          <radialGradient id="geo-dot" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity="1" />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.2" />
+          </radialGradient>
+        </defs>
+        <rect x="0" y="0" width={width} height={height} fill="url(#geo-bg)" stroke="var(--border2)" />
+
+        {/* Graticule */}
+        {[...Array(7)].map((_, i) => {
+          const y = margin + (i / 6) * (height - 2 * margin)
+          return <line key={`g-h-${i}`} x1={margin} y1={y} x2={width - margin} y2={y} stroke="var(--border2)" strokeOpacity="0.25" strokeWidth="0.5" />
+        })}
+        {[...Array(7)].map((_, i) => {
+          const x = margin + (i / 6) * (width - 2 * margin)
+          return <line key={`g-v-${i}`} y1={margin} x1={x} y2={height - margin} x2={x} stroke="var(--border2)" strokeOpacity="0.25" strokeWidth="0.5" />
+        })}
+
+        {points.map((p) => {
+          const j = jitter(p.ip)
+          const { x, y } = project(p.lat + j.dy, p.lon + j.dx)
+          return (
+            <g key={p.ip}>
+              <circle cx={x} cy={y} r={7} fill="url(#geo-dot)" />
+              <text x={x + 10} y={y + 4} fontSize="11" fill="var(--text)" opacity="0.9">
+                {p.country || p.ip}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+      <div className="geo-map-meta">
+        <span>{points.length} host{points.length !== 1 ? 's' : ''} geolocated · {new Set(points.map(p => p.country || 'Unknown')).size} countries</span>
+      </div>
+    </div>
+  )
+}
+
 export default function ScanConsole() {
   const location  = useLocation()
   const navigate  = useNavigate()
@@ -135,21 +221,50 @@ export default function ScanConsole() {
 
   // ── Job state ─────────────────────────────────────────────────────────
   const [jobId,       setJobId]       = useState(urlJobId || null)
-  const [jobStatus,   setJobStatus]   = useState(null)
-  const [stats,       setStats]       = useState({ probed: 0, responsive: 0, vuln_hosts: 0 })
-  const [hits,        setHits]        = useState([])
-  const [error,       setError]       = useState('')
-  const [activeHit,   setActiveHit]   = useState(null)
-  const [intelBanner, setIntelBanner] = useState(null)
+const [jobStatus,   setJobStatus]   = useState(null)
+const [stats,       setStats]       = useState({ probed: 0, responsive: 0, vuln_hosts: 0 })
+const [hits,        setHits]        = useState([])
+const [error,       setError]       = useState('')
+const [activeHit,   setActiveHit]   = useState(null)
+const [intelBanner, setIntelBanner] = useState(null)
 
-  // ── Hit filter + selection ────────────────────────────────────────────
-  const [onlyFindings, setOnlyFindings] = useState(true)
-  const [selectedIPs,  setSelectedIPs]  = useState(new Set())
+// ── Hit filter + selection ────────────────────────────────────────────
+const [onlyFindings,       setOnlyFindings]       = useState(true)
+const [portServiceFilter,  setPortServiceFilter]  = useState('')
+const [severityFilter,     setSeverityFilter]     = useState('all') // all | high | critical
+const [selectedIPs,        setSelectedIPs]        = useState(new Set())
+const [geoPoints,          setGeoPoints]          = useState([])
+const [geoLoading,         setGeoLoading]         = useState(false)
+const [geoError,           setGeoError]           = useState('')
 
-  const visibleHits = useMemo(() => {
-    if (onlyFindings) return hits.filter(h => h.status !== 'silent' && h.port > 0)
-    return hits
-  }, [hits, onlyFindings])
+const hitMaxScore = (hit) => {
+  if (!hit.cves?.length) return 0
+  return Math.max(...hit.cves.map(c => parseFloat(c.score || '0') || 0))
+}
+
+const matchesPortService = (hit, term) => {
+  const t = term.trim().toLowerCase()
+  if (!t) return true
+  const portNum = Number(t)
+  if (!Number.isNaN(portNum)) return hit.port === portNum
+  return (
+    (hit.software && hit.software.toLowerCase().includes(t)) ||
+    (hit.banner && hit.banner.toLowerCase().includes(t))
+  )
+}
+
+const passesSeverity = (hit) => {
+  if (severityFilter === 'all') return true
+  const maxScore = hitMaxScore(hit)
+  if (severityFilter === 'critical') return maxScore >= 9.0
+  if (severityFilter === 'high') return maxScore >= 7.0
+  return true
+}
+
+const visibleHits = useMemo(() => {
+  const base = onlyFindings ? hits.filter(h => h.status !== 'silent' && h.port > 0) : hits
+  return base.filter((hit) => matchesPortService(hit, portServiceFilter)).filter(passesSeverity)
+}, [hits, onlyFindings, portServiceFilter, severityFilter])
 
   const toggleSelectIP = (ip) => {
     setSelectedIPs(prev => {
@@ -164,13 +279,69 @@ export default function ScanConsole() {
   const selectAllVisible = () => setSelectedIPs(new Set(visibleUniqueIPs))
   const clearSelection   = () => setSelectedIPs(new Set())
 
-  const rescanSelected = () => {
-    if (selectedIPs.size === 0) return
-    const newRanges = Array.from(selectedIPs).join('\n')
-    navigate('/scan/new', {
-      state: { ranges: newRanges, country, countryName }
-    })
+const rescanSelected = () => {
+  if (selectedIPs.size === 0) return
+  const newRanges = Array.from(selectedIPs).join('\n')
+  navigate('/scan/new', {
+    state: { ranges: newRanges, country, countryName }
+  })
+}
+
+const exportResults = (format) => {
+  const rows = visibleHits.map((h) => ({
+    ip: h.ip,
+    port: h.port,
+    status: h.status,
+    software: h.software || '',
+    banner: h.banner || '',
+    cve_count: h.cves?.length || 0,
+    max_cvss: hitMaxScore(h),
+    range: h.range || '',
+  }))
+  if (format === 'json') {
+    const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `scan-${jobId || 'results'}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    return
   }
+  const header = ['ip', 'port', 'status', 'software', 'banner', 'cve_count', 'max_cvss', 'range']
+  const csv = [header.join(',')]
+  rows.forEach((r) => {
+    const vals = header.map((k) => `"${String(r[k]).replace(/\"/g, '""')}"`)
+    csv.push(vals.join(','))
+  })
+  const blob = new Blob([csv.join('\n')], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `scan-${jobId || 'results'}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+const buildGeoMap = async () => {
+  const uniqueIps = [...new Set(visibleHits.map((h) => h.ip))].slice(0, 200)
+  setGeoLoading(true)
+  setGeoError('')
+  const points = []
+  for (const ip of uniqueIps) {
+    try {
+      const info = await fetchIpInfo(ip)
+      if (info?.lat != null && info?.lon != null) {
+        points.push({ ip, lat: info.lat, lon: info.lon, country: info.country })
+      }
+    } catch (e) {
+      setGeoError(e.message)
+      break
+    }
+  }
+  setGeoPoints(points)
+  setGeoLoading(false)
+}
 
   const esRef  = useRef(null)
   const logRef = useRef(null)
@@ -631,6 +802,25 @@ export default function ScanConsole() {
         {/* ── Toolbar ── */}
         {hits.length > 0 && (
           <div className="hit-toolbar">
+            <div className="hit-filter-fields">
+              <label className="hit-filter-input">
+                <FiFilter size={14} />
+                <input
+                  value={portServiceFilter}
+                  onChange={(e) => setPortServiceFilter(e.target.value)}
+                  placeholder="Filter by port or service (e.g. 443, redis)"
+                />
+              </label>
+              <label className="hit-filter-select">
+                Severity
+                <select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
+                  <option value="all">All</option>
+                  <option value="high">High+</option>
+                  <option value="critical">Critical</option>
+                </select>
+              </label>
+            </div>
+
             <label className="hit-filter-toggle" title="Show only hosts with banner/software/CVEs">
               <input type="checkbox" checked={onlyFindings}
                 onChange={e => { setOnlyFindings(e.target.checked); setSelectedIPs(new Set()) }} />
@@ -654,8 +844,30 @@ export default function ScanConsole() {
                 </button>
               </>
             )}
+
+            <div className="hit-toolbar-sep" />
+
+            <div className="hit-export-group">
+              <button className="ghost small" onClick={() => exportResults('csv')}>
+                <FiDownload size={13} /> CSV
+              </button>
+              <button className="ghost small" onClick={() => exportResults('json')}>
+                <FiDownload size={13} /> JSON
+              </button>
+            </div>
+
+            <button className="ghost small" onClick={buildGeoMap} disabled={geoLoading}>
+              <FiGlobe size={13} /> {geoLoading ? 'Mapping…' : 'Geo map'}
+            </button>
           </div>
         )}
+
+        {geoPoints.length > 0 && (
+          <div className="geo-map-wrap">
+            <GeoMap points={geoPoints} />
+          </div>
+        )}
+        {geoError && <p className="error" style={{ margin: '8px 16px' }}>{geoError}</p>}
 
         <div className="hit-stream" ref={logRef}>
           {hits.length === 0 && (
