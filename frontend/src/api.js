@@ -97,35 +97,48 @@ export async function contributeIntel(country, payload) {
   return contributeCountryIntel(country, payload)
 }
 
-// ── Geo/ASN lookup ────────────────────────────────────────────────────────
+// ── Geo/ASN lookup ─────────────────────────────────────────────────────────
+// Routes through the backend /ip/{ip} proxy to avoid CORS restrictions.
+// Direct browser-to-third-party geo lookups (ip-api.com, freeipapi.com, etc.)
+// are blocked when the frontend runs on localhost or HTTPS origins.
 export async function fetchIpInfo(ip) {
-  const sources = [
-    async () => {
-      const fields = 'status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query,reverse'
-      const r = await fetch(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=${fields}`)
-      if (!r.ok) throw new Error('ip-api.com ' + r.status)
+  // Primary: backend proxy — normalises the ip-api.com response server-side,
+  // no CORS issues, works for both HTTP and HTTPS origins.
+  try {
+    const data = await request(`/ip/${encodeURIComponent(ip)}`)
+    // ip-api.com returns status:'fail' for private/reserved ranges
+    if (data.status === 'fail') throw new Error(data.message || 'ip-api.com fail')
+    return data
+  } catch (backendErr) {
+    // Fallback: ipapi.co — CORS-enabled, HTTPS, free tier
+    // Used only if the backend itself is unreachable.
+    try {
+      const r = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`)
+      if (!r.ok) throw new Error('ipapi.co ' + r.status)
       const d = await r.json()
-      if (d.status === 'fail') throw new Error(d.message || 'ip-api.com fail')
-      return d
-    },
-    async () => {
-      const r = await fetch(`https://freeipapi.com/api/json/${encodeURIComponent(ip)}`)
-      if (!r.ok) throw new Error('freeipapi ' + r.status)
-      const d = await r.json()
+      if (d.error) throw new Error(d.reason || 'ipapi.co error')
+      // Normalise to ip-api.com shape so callers don't need to branch
       return {
-        status: 'success', query: d.ipAddress,
-        country: d.countryName, countryCode: d.countryCode,
-        regionName: d.regionName, city: d.cityName,
-        lat: d.latitude,  lon: d.longitude,
-        isp: '', org: '', as: '', reverse: '',
+        status:      'success',
+        query:       d.ip,
+        country:     d.country_name,
+        countryCode: d.country_code,
+        region:      d.region_code,
+        regionName:  d.region,
+        city:        d.city,
+        zip:         d.postal,
+        lat:         d.latitude,
+        lon:         d.longitude,
+        timezone:    d.timezone,
+        isp:         d.org,
+        org:         d.org,
+        as:          d.asn,
+        reverse:     d.hostname || '',
       }
-    },
-  ]
-  let lastErr
-  for (const src of sources) {
-    try { return await src() } catch (e) { lastErr = e }
+    } catch (ipapiErr) {
+      throw new Error(`Geo lookup failed — backend: ${backendErr.message} | ipapi.co: ${ipapiErr.message}`)
+    }
   }
-  throw new Error('All geo sources failed: ' + lastErr?.message)
 }
 
 export async function fetchHttpInspect({ ip, port, scheme = 'http', path = '/' }) {

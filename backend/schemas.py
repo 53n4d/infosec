@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import List, Optional, Dict, Any
 
 
@@ -47,10 +47,18 @@ class ScanRequest(BaseModel):
     ports: Optional[List[int]] = None
     all_ports: bool = False
     run_cve: bool = True
-    masscan_rate: int = 1000
+    masscan_rate: int = 300
     country: Optional[str] = None      # optional — used for intel contribution
     scan_mode: str = 'wide'            # 'wide' (masscan) | 'deep' (nmap)
     nmap_parallelism: int = 100        # --min-parallelism for deep scan (1–500)
+
+    @field_validator("masscan_rate", mode="before")
+    @classmethod
+    def _cap_masscan_rate(cls, v):
+        try:
+            return max(1, int(v))
+        except Exception:
+            return v
 
 
 class ScanResponse(BaseModel):

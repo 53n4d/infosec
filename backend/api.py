@@ -468,6 +468,31 @@ async def _run_with_masscan(job_id: str, job: dict, request: ScanRequest, ports:
     os.unlink(json_out)
 
     ports_arg = ",".join(map(str, sorted(ports)))
+
+    def _compute_safe_rate(requested_rate: int, total_ips: int, num_ports: int) -> int:
+        """
+        Scale rate based on scan scope so all-port scans run fast
+        while small targeted scans stay gentle on the router.
+        """
+        total_packets = total_ips * num_ports
+
+        if num_ports >= 10000:
+            # All-ports / large port set — masscan is designed for this, router
+            # handles it fine because packets are spread across 65k destinations.
+            # Allow up to 5000 pps on all-port scans.
+            ceiling = 5000
+        elif num_ports >= 1000:
+            ceiling = 2000
+        elif total_ips <= 16:
+            # Tiny target range — keep it slow regardless of port count
+            ceiling = 500
+        else:
+            # Default: preset/custom ports, medium range
+            ceiling = 1500
+
+        return max(50, min(requested_rate, ceiling))
+
+    num_ports = 65535 if request.all_ports else max(len(ports), 1)
     # Calculate dynamic wait time based on scan size
     total_ips = 0
     for r in request.ranges:
@@ -475,20 +500,22 @@ async def _run_with_masscan(job_id: str, job: dict, request: ScanRequest, ports:
             total_ips += ipaddress.ip_network(r, strict=False).num_addresses
         except Exception:
             total_ips += 1
-    total_packets = total_ips * max(len(ports), 1)
-    dynamic_wait  = max(10, int(total_packets / request.masscan_rate) + 5)
+    total_packets = total_ips * num_ports
+    effective_rate = _compute_safe_rate(request.masscan_rate, total_ips, num_ports)
+    dynamic_wait  = max(10, int(total_packets / effective_rate) + 5)
 
     cmd = [
         "sudo", "masscan",
         "-iL", ranges_file,
         "-p", "0-65535" if request.all_ports else ports_arg,
-        "--rate", str(request.masscan_rate),
+        "--rate", str(effective_rate),
+        "--max-rate", str(effective_rate),
         "--open-only",
         "--wait", str(dynamic_wait),
         "-oJ", json_out,
     ]
 
-    print(f"[masscan] {total_ips} IPs × {max(len(ports),1)} ports = {total_packets} pkts @ {request.masscan_rate}pps → wait={dynamic_wait}s", flush=True)
+    print(f"[masscan] effective_rate={effective_rate} (requested={request.masscan_rate}, ports={num_ports}, ips={total_ips})", flush=True)
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -504,7 +531,7 @@ async def _run_with_masscan(job_id: str, job: dict, request: ScanRequest, ports:
     )
     worker_tasks = [
         asyncio.create_task(_probe_worker(job_id, job, queue, seen_software, request.run_cve))
-        for _ in range(10)
+        for _ in range(5)
     ]
 
     await proc.wait()
@@ -577,7 +604,7 @@ async def _watch_masscan_json(json_out: str, queue: asyncio.Queue,
             break
         await asyncio.sleep(poll)
 
-    for _ in range(10):
+    for _ in range(5):
         await queue.put(None)
 
 
@@ -619,6 +646,7 @@ async def _probe_worker(job_id: str, job: dict, queue: asyncio.Queue,
             cves=cves,
         )
         job["hits"].append(hit)
+        await asyncio.sleep(0.1)
         queue.task_done()
 
 

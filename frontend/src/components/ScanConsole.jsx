@@ -1,25 +1,24 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   TbAlertTriangle,
   TbArrowLeft,
   TbArrowUpRight,
   TbBolt,
-  TbCamera,
   TbDownload,
   TbFilter,
   TbLock,
   TbPlayerPlay,
   TbRefresh,
   TbSearch,
-  TbShare2,
   TbWorld,
   TbX,
 } from 'react-icons/tb'
-import { startScan, streamScanJob, fetchCountries, fetchIpInfo, fetchTlsCert } from '../api'
+import { startScan, streamScanJob, fetchCountries, fetchIpInfo } from '../api'
 import { contributeCountryIntel } from '../intel'
 import GeoMap from './GeoMap'
 import { tlsExpiryColor } from './IpDetail'
+import { enqueueTlsFetch } from '../tlsQueue'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -113,24 +112,18 @@ function countryFlag(code) {
          String.fromCodePoint(code.toUpperCase().charCodeAt(1) + offset)
 }
 
-// Cache TLS results in a module-level map so we only fetch once per IP:port.
-const _tlsCache = {}
+const TLS_PORTS = new Set([443, 8443])
 
 function useTlsBadge(ip, port) {
-  const TLS_PORTS = [443, 8443]
-  const [info, setInfo] = React.useState(null)   // { days_left, expired, self_signed }
+  const [info, setInfo] = useState(null)
 
-  React.useEffect(() => {
-    if (!TLS_PORTS.includes(port)) return
-    const key = `${ip}:${port}`
-    if (_tlsCache[key]) { setInfo(_tlsCache[key]); return }
-    fetchTlsCert(ip, port)
-      .then(d => {
-        const cached = { days_left: d.days_left, expired: d.expired, self_signed: d.self_signed, error: d.error }
-        _tlsCache[key] = cached
-        setInfo(cached)
-      })
-      .catch(() => {})
+  useEffect(() => {
+    if (!TLS_PORTS.has(port)) return
+    let cancelled = false
+    enqueueTlsFetch(ip, port).then(data => {
+      if (!cancelled) setInfo(data)
+    })
+    return () => { cancelled = true }
   }, [ip, port])
 
   return info
@@ -153,7 +146,7 @@ function PortChipWithTls({ hit, ip, hasData }) {
     const title = tls.expired
       ? 'TLS cert expired'
       : tls.self_signed
-        ? 'Self-signed cert'
+        ? 'Self-signed certificate'
         : tls.days_left !== null
           ? `TLS cert expires in ${tls.days_left} days`
           : 'TLS cert found'
@@ -186,7 +179,7 @@ function PortChipWithTls({ hit, ip, hasData }) {
     <span
       className={`port-chip ${hasData ? 'port-chip-hit' : ''}`}
       title={hit.software || (hit.banner ? hit.banner.slice(0, 60) : '')}
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 0 }}
+      style={{ display: 'inline-flex', alignItems: 'center' }}
     >
       :{hit.port}
       {hit.software && (
@@ -252,8 +245,13 @@ export default function ScanConsole() {
   const portDropRef = useRef(null)
   const [scanMode,        setScanMode]        = useState('wide')
   const [runCve,          setRunCve]          = useState(true)
-  const [masscanRate,     setMasscanRate]     = useState(1000)
+  const [masscanRate,     setMasscanRate]     = useState(300)
   const [nmapParallelism, setNmapParallelism] = useState(100)
+  const maxRate = useMemo(() => {
+    if (portMode === 'all') return 5000
+    if (portMode === 'custom' && customPorts.length > 1000) return 3000
+    return 2000
+  }, [portMode, customPorts.length])
 
   // ── Job state ─────────────────────────────────────────────────────────
   const [jobId,       setJobId]       = useState(urlJobId || null)
@@ -454,6 +452,9 @@ export default function ScanConsole() {
   }, [hits])
 
   useEffect(() => () => esRef.current?.close(), [])
+  useEffect(() => {
+    if (masscanRate > maxRate) setMasscanRate(maxRate)
+  }, [maxRate, masscanRate])
 
   // ── Scan submit ───────────────────────────────────────────────────────
   const handleSubmit = async (e) => {
@@ -467,13 +468,15 @@ export default function ScanConsole() {
       setError('Add at least one port in Custom mode.'); return
     }
 
+    const safeMasscanRate = Math.min(masscanRate, maxRate)
+
     try {
       const { job_id } = await startScan({
         ranges:           rangeList,
         ports:            finalPorts(),
         all_ports:        portMode === 'all',
         run_cve:          runCve,
-        masscan_rate:     masscanRate,
+        masscan_rate:     safeMasscanRate,
         scan_mode:        scanMode,
         nmap_parallelism: nmapParallelism,
       })
@@ -482,7 +485,7 @@ export default function ScanConsole() {
         ranges: rangeList, rangesText: ranges,
         startedAt: Date.now(), status: 'running',
         probed: 0, open: 0, vulns: 0,
-        scan_mode: scanMode, nmap_parallelism: nmapParallelism, masscan_rate: masscanRate,
+        scan_mode: scanMode, nmap_parallelism: nmapParallelism, masscan_rate: safeMasscanRate,
       }))
       navigate('/scan/' + job_id, { replace: true })
     } catch (err) {
@@ -760,17 +763,35 @@ export default function ScanConsole() {
           {/* Rate — wide scan only */}
           {scanMode === 'wide' && (
             <div className="field">
-              <label>Rate (pps) max 10,000</label>
+              <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Rate (pps)</span>
+                <span className="mono" style={{ color: 'var(--cyan)', fontSize: '0.78rem' }}>
+                  {masscanRate.toLocaleString()} pps
+                </span>
+              </label>
               <input
-                type="number" min={100} max={10000}
+                type="range"
+                min={50}
+                max={maxRate}
+                step={50}
                 value={masscanRate}
                 onChange={e => setMasscanRate(Number(e.target.value))}
               />
-              {masscanRate > 2000 && (
-                <p className="hint" style={{ color: 'var(--high)', display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <TbAlertTriangle size={13} /> High rate may miss hosts. Recommended: 500–2000 pps.
-                </p>
-              )}
+              <p
+                className="hint"
+                style={{
+                  color: masscanRate > 1500 ? 'var(--high)' : masscanRate >= 900 ? 'var(--med)' : 'var(--dim)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  marginTop: 6,
+                }}
+              >
+                <TbAlertTriangle size={13} />
+                {masscanRate > 1500
+                  ? 'High rate may miss hosts. Suggested 500–1500 pps for accuracy.'
+                  : 'Higher rates finish faster but can miss hosts; 500–1500 pps is a good balance.'}
+              </p>
             </div>
           )}
 
