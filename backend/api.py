@@ -1,10 +1,12 @@
 import asyncio
 import base64
+import datetime
 import http.client
 import ipaddress
 import json
 import os
 import re
+import socket
 import ssl
 import sys
 import tempfile
@@ -33,6 +35,8 @@ from backend.schemas import (
     HttpInspectResponse,
     HttpScreenshotRequest,
     HttpScreenshotResponse,
+    TlsCertResponse,
+    ReconTextResponse,
 )
 
 app = FastAPI(
@@ -242,6 +246,148 @@ async def http_screenshot(payload: HttpScreenshotRequest):
     except Exception as exc:  # noqa: BLE001
         return HttpScreenshotResponse(error=str(exc))
 
+
+import datetime as _dt
+import socket   as _socket
+import ssl      as _ssl_mod   # alias — 'ssl' is already imported at the top
+
+# ── TLS certificate inspector ──────────────────────────────────────────────────
+
+def _tls_inspect_sync(ip: str, port: int) -> dict:
+    """Grab TLS cert from ip:port without verifying trust chain."""
+    ctx = _ssl_mod.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode    = _ssl_mod.CERT_NONE   # accept self-signed / expired
+    try:
+        raw_sock = _socket.create_connection((ip, port), timeout=6)
+        tls_sock = ctx.wrap_socket(raw_sock, server_hostname=ip)
+        cert     = tls_sock.getpeercert(binary_form=False)   # decoded dict
+        tls_sock.close()
+    except Exception as exc:
+        return {"error": str(exc), "sans": [], "expired": False, "self_signed": False}
+
+    def _dn(rdns, key):
+        for rdn in rdns:
+            for k, v in rdn:
+                if k == key:
+                    return v
+        return None
+
+    subject    = cert.get("subject",  [])
+    issuer     = cert.get("issuer",   [])
+    subject_cn = _dn(subject, "commonName")
+    issuer_cn  = _dn(issuer,  "commonName")
+    issuer_org = _dn(issuer,  "organizationName")
+    self_signed = (subject == issuer) or (subject_cn and subject_cn == issuer_cn)
+
+    # Subject Alternative Names (DNS only)
+    sans = [v for k, v in cert.get("subjectAltName", []) if k == "DNS"]
+
+    # Validity
+    fmt           = "%b %d %H:%M:%S %Y %Z"
+    not_before    = cert.get("notBefore", "")
+    not_after     = cert.get("notAfter",  "")
+    now           = _dt.datetime.utcnow()
+    days_left     = None
+    expired       = False
+    try:
+        not_after_dt = _dt.datetime.strptime(not_after, fmt)
+        days_left    = (not_after_dt - now).days
+        expired      = days_left < 0
+    except Exception:
+        pass
+
+    return {
+        "subject_cn":  subject_cn,
+        "issuer_cn":   issuer_cn,
+        "issuer_org":  issuer_org,
+        "sans":        sans,
+        "not_before":  not_before,
+        "not_after":   not_after,
+        "days_left":   days_left,
+        "expired":     expired,
+        "self_signed": self_signed,
+        "serial":      cert.get("serialNumber", ""),
+    }
+
+
+@app.get("/tls/{ip}/{port}")
+async def tls_inspect(ip: str, port: int):
+    """
+    Retrieve TLS certificate metadata from ip:port.
+    Returns subject CN, issuer, SANs, expiry, days_left, self_signed flag.
+    Does NOT verify the trust chain — works on self-signed certs too.
+    """
+    result = await asyncio.to_thread(_tls_inspect_sync, ip, port)
+    return result
+
+
+# ── robots.txt + security.txt fetcher ─────────────────────────────────────────
+
+def _fetch_recon_text_sync(ip: str, port: int, scheme: str, path: str) -> dict:
+    """HTTP(S) GET for a recon text file. Returns content up to 8 KB."""
+    url = f"{scheme}://{ip}:{port}{path}"
+    try:
+        if scheme == "https":
+            ctx = _ssl_mod.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode    = _ssl_mod.CERT_NONE
+            conn = http.client.HTTPSConnection(ip, port, timeout=7, context=ctx)
+        else:
+            conn = http.client.HTTPConnection(ip, port, timeout=7)
+
+        conn.request(
+            "GET", path,
+            headers={"Host": ip, "User-Agent": "xseverity-recon/1.0", "Accept": "*/*"},
+        )
+        resp   = conn.getresponse()
+        status = resp.status
+
+        if status == 200:
+            raw     = resp.read(8192)
+            content = raw.decode(errors="ignore").strip()
+            found   = bool(content)
+        else:
+            content = None
+            found   = False
+
+        conn.close()
+        return {"url": url, "status": status, "content": content, "found": found}
+
+    except Exception as exc:
+        return {"url": url, "status": None, "content": None, "found": False, "error": str(exc)}
+
+
+@app.get("/recon/robots")
+async def recon_robots(
+    ip:     str = Query(..., description="Target IP address"),
+    port:   int = Query(80,    description="HTTP(S) port"),
+    scheme: str = Query("http", description="http or https"),
+):
+    """Fetch /robots.txt from the target and return its content."""
+    return await asyncio.to_thread(_fetch_recon_text_sync, ip, port, scheme, "/robots.txt")
+
+
+@app.get("/recon/security-txt")
+async def recon_security_txt(
+    ip:     str = Query(..., description="Target IP address"),
+    port:   int = Query(80,    description="HTTP(S) port"),
+    scheme: str = Query("http", description="http or https"),
+):
+    """
+    Fetch /.well-known/security.txt (RFC 9116) from the target.
+    Falls back to /security.txt if the well-known location returns nothing.
+    """
+    result = await asyncio.to_thread(
+        _fetch_recon_text_sync, ip, port, scheme, "/.well-known/security.txt"
+    )
+    if not result["found"]:
+        fallback = await asyncio.to_thread(
+            _fetch_recon_text_sync, ip, port, scheme, "/security.txt"
+        )
+        if fallback["found"]:
+            return fallback
+    return result
 
 CVE_PROBE_PORTS = {21, 22, 23, 25, 80, 443, 445, 3306, 3389, 5432, 6379, 8080, 8443, 9200, 27017}
 

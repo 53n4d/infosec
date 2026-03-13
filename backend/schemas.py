@@ -106,3 +106,25 @@ class HttpScreenshotResponse(BaseModel):
     status: Optional[int] = None
     screenshot: Optional[str] = None  # base64 PNG
     error: Optional[str] = None
+
+
+class TlsCertResponse(BaseModel):
+    subject_cn:  Optional[str]  = None
+    issuer_cn:   Optional[str]  = None
+    issuer_org:  Optional[str]  = None
+    sans:        List[str]      = []
+    not_before:  Optional[str]  = None
+    not_after:   Optional[str]  = None
+    days_left:   Optional[int]  = None
+    expired:     bool           = False
+    self_signed: bool           = False
+    serial:      Optional[str]  = None
+    error:       Optional[str]  = None
+
+
+class ReconTextResponse(BaseModel):
+    url:     str
+    status:  Optional[int] = None
+    content: Optional[str] = None
+    found:   bool          = False
+    error:   Optional[str] = None

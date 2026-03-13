@@ -141,3 +141,21 @@ export async function fetchHttpScreenshot({ ip, port, scheme = 'http', path = '/
     body: JSON.stringify({ ip, port, scheme, path, full_page }),
   })
 }
+
+// ── TLS certificate info ───────────────────────────────────────────────────────
+export async function fetchTlsCert(ip, port = 443) {
+  return request(`/tls/${encodeURIComponent(ip)}/${port}`)
+}
+ 
+// ── robots.txt ────────────────────────────────────────────────────────────────
+export async function fetchRobotsTxt({ ip, port = 80, scheme = 'http' }) {
+  const params = new URLSearchParams({ ip, port, scheme })
+  return request(`/recon/robots?${params}`)
+}
+ 
+// ── security.txt (RFC 9116) ───────────────────────────────────────────────────
+export async function fetchSecurityTxt({ ip, port = 80, scheme = 'http' }) {
+  const params = new URLSearchParams({ ip, port, scheme })
+  return request(`/recon/security-txt?${params}`)
+}
+ 

@@ -90,7 +90,7 @@ export default function ScanDashboard() {
     const toRemove = []
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i)
-      if (k && k.startsWith('hit_')) toRemove.push(k)
+      if (k && k.startsWith('hit_' + jobId + '_')) toRemove.push(k)
     }
     toRemove.forEach((k) => localStorage.removeItem(k))
     setScans((prev) => prev.filter((s) => s.jobId !== jobId))

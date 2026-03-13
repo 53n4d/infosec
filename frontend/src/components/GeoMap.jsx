@@ -12,7 +12,6 @@ function countryFlag(code) {
          String.fromCodePoint(code.toUpperCase().charCodeAt(1) + offset)
 }
 
-// Equirectangular projection — maps [lon, lat] → [x, y] in viewBox space
 function projectLL(lat, lon, w, h, margin = 0) {
   const x = ((lon + 180) / 360) * (w - 2 * margin) + margin
   const y = ((90 - lat) / 180) * (h - 2 * margin) + margin
@@ -23,16 +22,14 @@ function ipJitter(ip) {
   let h = 0
   for (let i = 0; i < ip.length; i++) h = (h * 31 + ip.charCodeAt(i)) >>> 0
   const angle = (h % 360) * (Math.PI / 180)
-  // Use 1.5° spread radius so IPs in the same city are visually separated at high zoom
-  const r = 0.5 + ((h >> 10) % 100) / 100 * 1.0   // 0.5° – 1.5°
+  const r = 0.5 + ((h >> 10) % 100) / 100 * 1.0
   return { dx: Math.cos(angle) * r, dy: Math.sin(angle) * r }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TopoJSON → SVG path converter (no d3 required)
+// TopoJSON → SVG path converter
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Decode TopoJSON delta-encoded arc into [lon, lat] coordinate array
 function decodeArc(arc, transform) {
   const { scale, translate } = transform
   let x = 0, y = 0
@@ -43,7 +40,6 @@ function decodeArc(arc, transform) {
   })
 }
 
-// Stitch TopoJSON arcs into a single coordinate ring, respecting arc reversal
 function stitchArcs(topology, arcIndices) {
   const coords = []
   for (let idx of arcIndices) {
@@ -51,24 +47,18 @@ function stitchArcs(topology, arcIndices) {
     const arc = topology.arcs[reversed ? ~idx : idx]
     const decoded = decodeArc(arc, topology.transform)
     const pts = reversed ? decoded.slice().reverse() : decoded
-    // Skip first point of each arc except the first (it's shared with previous arc's last)
     coords.push(...(coords.length === 0 ? pts : pts.slice(1)))
   }
   return coords
 }
 
-// Convert a TopoJSON geometry object into SVG path strings, splitting on antimeridian crossings
 function topoGeomToPath(topology, geometry, W, H, MARGIN) {
   const paths = []
-
   const renderRings = (rings) => {
     let d = ''
     for (const ring of rings) {
       const coords = stitchArcs(topology, ring)
       if (coords.length < 2) continue
-
-      // Split ring into sub-segments at antimeridian crossings (lon jump > 180°)
-      // This prevents lines shooting across the entire map for Russia, Antarctica etc.
       let segment = []
       const segments = [segment]
       for (let i = 0; i < coords.length; i++) {
@@ -76,15 +66,12 @@ function topoGeomToPath(topology, geometry, W, H, MARGIN) {
           const prevLon = coords[i - 1][0]
           const currLon = coords[i][0]
           if (Math.abs(currLon - prevLon) > 180) {
-            // Antimeridian crossing — start a new sub-segment (MoveTo instead of LineTo)
             segment = []
             segments.push(segment)
           }
         }
         segment.push(coords[i])
       }
-
-      // Render each sub-segment as its own M...L...Z (or just M...L if it's a continuation)
       for (let si = 0; si < segments.length; si++) {
         const seg = segments[si]
         if (seg.length < 2) continue
@@ -92,7 +79,6 @@ function topoGeomToPath(topology, geometry, W, H, MARGIN) {
           const { x, y } = projectLL(lat, lon, W, H, MARGIN)
           return `${x.toFixed(1)},${y.toFixed(1)}`
         })
-        // First segment gets M+Z (closes back), subsequent segments are open sub-paths
         if (si === 0) {
           d += `M ${pts[0]} L ${pts.slice(1).join(' L ')} Z `
         } else {
@@ -102,7 +88,6 @@ function topoGeomToPath(topology, geometry, W, H, MARGIN) {
     }
     return d.trim()
   }
-
   if (geometry.type === 'Polygon') {
     const d = renderRings(geometry.arcs)
     if (d) paths.push(d)
@@ -112,11 +97,9 @@ function topoGeomToPath(topology, geometry, W, H, MARGIN) {
       if (d) paths.push(d)
     }
   }
-
   return paths
 }
 
-// Main converter: returns array of SVG path `d` strings from a TopoJSON object name
 function topoToPaths(topology, objectName, W, H, MARGIN) {
   const obj = topology.objects[objectName]
   if (!obj) return []
@@ -128,31 +111,344 @@ function topoToPaths(topology, objectName, W, H, MARGIN) {
   return allPaths
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Compute initial transform to fit all points in view
-// ─────────────────────────────────────────────────────────────────────────────
 function computeFitTransform(points, W, H, MARGIN) {
   if (!points.length) return { x: 0, y: 0, k: 1 }
   const lats = points.map(p => p.lat)
   const lons = points.map(p => p.lon)
   const minLat = Math.min(...lats), maxLat = Math.max(...lats)
   const minLon = Math.min(...lons), maxLon = Math.max(...lons)
-
   const padLat = Math.max((maxLat - minLat) * 0.8, 4)
   const padLon = Math.max((maxLon - minLon) * 0.8, 6)
   const pMinLat = minLat - padLat, pMaxLat = maxLat + padLat
   const pMinLon = minLon - padLon, pMaxLon = maxLon + padLon
-
   const { x: x1, y: y1 } = projectLL(pMaxLat, pMinLon, W, H, MARGIN)
   const { x: x2, y: y2 } = projectLL(pMinLat, pMaxLon, W, H, MARGIN)
   const bw = Math.max(x2 - x1, 1), bh = Math.max(y2 - y1, 1)
-
   const k  = Math.min(W / bw, H / bh, 200)
   const cx = (x1 + x2) / 2
   const cy = (y1 + y2) / 2
   return { k, x: W / 2 - cx * k, y: H / 2 - cy * k }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Styles — matching the new XSEVERITY design language
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CSS = `
+  .gm-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(5, 10, 20, 0.75);
+    backdrop-filter: blur(3px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .gm-wrap {
+    display: flex;
+    flex-direction: column;
+    width: min(1100px, 95vw);
+    height: min(620px, 90vh);
+    background: #0a0e1a;
+    border: 1px solid #1a2a3a;
+    box-shadow: 0 0 0 1px rgba(0,212,255,0.08), 0 32px 80px rgba(0,0,0,0.8);
+    font-family: 'JetBrains Mono', 'Fira Mono', monospace;
+    overflow: hidden;
+    border-radius: 3px;
+  }
+
+  /* ── Header ── */
+  .gm-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+    height: 36px;
+    background: #0d1117;
+    border-bottom: 1px solid #1a2a3a;
+    flex-shrink: 0;
+  }
+
+  .gm-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #00d4ff;
+    box-shadow: 0 0 6px #00d4ff;
+    flex-shrink: 0;
+  }
+
+  .gm-title {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    color: #e0eeff;
+    text-transform: uppercase;
+  }
+
+  .gm-sub {
+    font-size: 0.6rem;
+    color: #3a5a7a;
+    letter-spacing: 0.05em;
+  }
+
+  .gm-badges {
+    display: flex;
+    gap: 6px;
+    margin-left: 6px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+
+  .gm-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 2px;
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+    background: #0d1f2e;
+    border: 1px solid #1a3a50;
+    color: #8ab4cc;
+    white-space: nowrap;
+  }
+
+  .gm-badge b {
+    color: #00d4ff;
+    font-weight: 700;
+  }
+
+  .gm-badge--port {
+    border-color: #1a3a28;
+    background: #0d1f18;
+    color: #7abf99;
+  }
+
+  .gm-badge--port b {
+    color: #00ff88;
+  }
+
+  .gm-close {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 2px;
+    border: 1px solid #1a2a3a;
+    background: transparent;
+    color: #3a5a7a;
+    cursor: pointer;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+
+  .gm-close:hover {
+    border-color: #00d4ff;
+    color: #00d4ff;
+    background: #001a2a;
+  }
+
+  /* ── Body ── */
+  .gm-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* ── Map ── */
+  .gm-map-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: #050d14;
+  }
+
+  .gm-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .gm-hint {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.55rem;
+    color: #1e3a50;
+    letter-spacing: 0.08em;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  /* ── Tooltip ── */
+  .gm-tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: #0d1117;
+    border: 1px solid #1a3a50;
+    border-radius: 3px;
+    padding: 8px 10px;
+    min-width: 160px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,212,255,0.08);
+    z-index: 10;
+  }
+
+  .gm-tip-ip {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #00d4ff;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+    border-bottom: 1px solid #1a2a3a;
+    padding-bottom: 5px;
+  }
+
+  .gm-tip-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 3px;
+    font-size: 0.6rem;
+  }
+
+  .gm-tip-label {
+    color: #2a4a6a;
+    letter-spacing: 0.1em;
+    font-size: 0.55rem;
+    min-width: 48px;
+  }
+
+  .gm-tip-soft {
+    margin-left: 4px;
+    color: #3a6a5a;
+    font-size: 0.58rem;
+  }
+
+  .gm-tip-dim {
+    color: #6a8aa0;
+    font-size: 0.58rem;
+  }
+
+  .gm-tip-coords {
+    color: #4a6a80;
+    font-size: 0.58rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Sidebar ── */
+  .gm-sidebar {
+    width: 200px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid #1a2a3a;
+    background: #0d1117;
+    overflow: hidden;
+  }
+
+  .gm-sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px 6px;
+    border-bottom: 1px solid #1a2a3a;
+    flex-shrink: 0;
+  }
+
+  .gm-sidebar-search {
+    margin: 6px 8px;
+    padding: 4px 8px;
+    background: #0a0e1a;
+    border: 1px solid #1a2a3a;
+    border-radius: 2px;
+    color: #8ab4cc;
+    font-size: 0.6rem;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .gm-sidebar-search::placeholder {
+    color: #2a4a6a;
+  }
+
+  .gm-sidebar-search:focus {
+    border-color: #00d4ff;
+  }
+
+  .gm-sidebar-list {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .gm-sidebar-list::-webkit-scrollbar {
+    width: 3px;
+  }
+  .gm-sidebar-list::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .gm-sidebar-list::-webkit-scrollbar-thumb {
+    background: #1a3a50;
+    border-radius: 2px;
+  }
+
+  .gm-sidebar-row {
+    padding: 7px 10px;
+    cursor: pointer;
+    border-bottom: 1px solid #0f1a24;
+    transition: background 0.1s;
+  }
+
+  .gm-sidebar-row:hover,
+  .gm-sidebar-row--hovered {
+    background: #0d1f2e;
+  }
+
+  .gm-sidebar-row--selected {
+    background: #0a1e2e;
+    border-left: 2px solid #00d4ff;
+    padding-left: 8px;
+  }
+
+  .gm-sidebar-row-top {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+  }
+
+  .gm-sidebar-ip {
+    font-size: 0.62rem;
+    color: #c0d8e8;
+    letter-spacing: 0.04em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .gm-sidebar-port {
+    font-size: 0.58rem;
+    color: #00d4ff;
+  }
+
+  .gm-sidebar-meta {
+    font-size: 0.58rem;
+    color: #3a5a7a;
+    margin-top: 2px;
+  }
+
+  .gm-sidebar-sw {
+    font-size: 0.55rem;
+    color: #2a5a4a;
+    margin-top: 1px;
+  }
+`
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Component
@@ -167,37 +463,28 @@ export default function GeoMap({ points = [], onClose }) {
   const [tooltip,       setTooltip]       = useState(null)
   const [hovered,       setHovered]       = useState(null)
   const [selected,      setSelected]      = useState(null)
-  // Lazy initial state — compute fit transform once from points at mount
   const [transform,     setTransform]     = useState(() => computeFitTransform(points, W, H, MARGIN))
   const [dragging,      setDragging]      = useState(null)
   const [sidebarFilter, setSidebarFilter] = useState('')
 
-
-  // ── Load real world map data ──────────────────────────────────────────────
   useEffect(() => {
-    // Natural Earth 110m land polygons via TopoJSON — lightweight (~105KB), public domain
     const URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json'
     fetch(URL)
       .then(r => r.json())
       .then(topo => {
-        // world-atlas uses object name "land"
         const paths = topoToPaths(topo, 'land', W, H, MARGIN)
         setLandPaths(paths)
       })
-      .catch(() => {
-        // Silent fallback — dots still render, just no land background
-      })
+      .catch(() => {})
       .finally(() => setMapLoading(false))
   }, [])
 
-  // ── ESC to close ─────────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose?.() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // ── Derived stats ─────────────────────────────────────────────────────────
   const countryCounts = useMemo(() =>
     points.reduce((acc, p) => {
       const k = p.country || 'Unknown'
@@ -226,7 +513,6 @@ export default function GeoMap({ points = [], onClose }) {
       : points,
     [points, sidebarFilter])
 
-  // ── Zoom ──────────────────────────────────────────────────────────────────
   const handleWheel = useCallback((e) => {
     e.preventDefault()
     const delta = e.deltaY > 0 ? 0.85 : 1.18
@@ -251,7 +537,6 @@ export default function GeoMap({ points = [], onClose }) {
     return () => el.removeEventListener('wheel', handleWheel)
   }, [handleWheel])
 
-  // ── Drag ──────────────────────────────────────────────────────────────────
   const startDrag = (e) => {
     if (e.button !== 0) return
     setDragging({ startX: e.clientX, startY: e.clientY, tx: transform.x, ty: transform.y })
@@ -266,32 +551,35 @@ export default function GeoMap({ points = [], onClose }) {
   }
   const endDrag = () => setDragging(null)
 
-  // ── Fly-to ────────────────────────────────────────────────────────────────
   const flyTo = (point) => {
     setSelected(point.ip)
     const j = ipJitter(point.ip)
     const { x, y } = projectLL(point.lat + j.dy, point.lon + j.dx, W, H, MARGIN)
-    const k = Math.min(transform.k * 2.5, 80)   // zoom in further but don't exceed 80×
+    const k = Math.min(transform.k * 2.5, 80)
     setTransform({ x: W / 2 - x * k, y: H / 2 - y * k, k })
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render
-  // ─────────────────────────────────────────────────────────────────────────
+  // Dot color: cyan for selected, white for hovered, green for default — matching screenshot
+  const dotColor = (ip) => {
+    if (selected === ip) return '#00d4ff'
+    if (hovered  === ip) return '#ffffff'
+    return '#00ff88'
+  }
+
   return (
-    <div className="gm-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose?.() }}>
-      <div className="gm-modal">
+    <>
+      <style>{CSS}</style>
+      <div className="gm-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose?.() }}>
+      <div className="gm-wrap">
 
         {/* ── Header ── */}
         <div className="gm-header">
-          <div className="gm-header-left">
-            <span className="gm-dot" />
-            <span className="gm-title mono">GEO MAP</span>
-            <span className="gm-sub mono">
-              {points.length} host{points.length !== 1 ? 's' : ''} ·{' '}
-              {Object.keys(countryCounts).length} countr{Object.keys(countryCounts).length !== 1 ? 'ies' : 'y'}
-            </span>
-          </div>
+          <span className="gm-dot" />
+          <span className="gm-title">GEO MAP</span>
+          <span className="gm-sub">
+            {points.length} host{points.length !== 1 ? 's' : ''} ·{' '}
+            {Object.keys(countryCounts).length} countr{Object.keys(countryCounts).length !== 1 ? 'ies' : 'y'}
+          </span>
 
           <div className="gm-badges">
             {topCountries.map(([country, count]) => {
@@ -309,9 +597,11 @@ export default function GeoMap({ points = [], onClose }) {
             )}
           </div>
 
-          <button className="ghost small gm-close" onClick={onClose} title="Close (ESC)">
-            <FiX size={15} />
-          </button>
+          {onClose && (
+            <button className="gm-close" onClick={onClose} title="Close (ESC)">
+              <FiX size={13} />
+            </button>
+          )}
         </div>
 
         {/* ── Body ── */}
@@ -335,37 +625,29 @@ export default function GeoMap({ points = [], onClose }) {
                   <stop offset="100%" stopColor="#050d14" />
                 </radialGradient>
                 <filter id="gm-glow">
-                  <feGaussianBlur stdDeviation="2.5" result="blur" />
+                  <feGaussianBlur stdDeviation="2" result="blur" />
                   <feMerge>
                     <feMergeNode in="blur" />
                     <feMergeNode in="SourceGraphic" />
                   </feMerge>
                 </filter>
-                <style>{`
-                  @keyframes gm-pulse {
-                    0%   { r: 5;  opacity: 0.7; }
-                    100% { r: 20; opacity: 0;   }
-                  }
-                  .gm-ring  { animation: gm-pulse 2.2s ease-out infinite; }
-                  .gm-ring2 { animation: gm-pulse 2.2s ease-out 0.8s infinite; }
-                `}</style>
               </defs>
 
               <g transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
 
-                {/* Ocean background */}
+                {/* Ocean */}
                 <rect x={0} y={0} width={W} height={H} fill="url(#gm-ocean)" />
 
-                {/* Graticule grid */}
+                {/* Grid */}
                 {[...Array(13)].map((_, i) => (
                   <line key={`gv${i}`}
                     x1={(i / 12) * W} y1={0} x2={(i / 12) * W} y2={H}
-                    stroke="#1a3a5c" strokeWidth="0.4" strokeOpacity="0.4" />
+                    stroke="#0e2a40" strokeWidth="0.4" strokeOpacity="0.5" />
                 ))}
                 {[...Array(7)].map((_, i) => (
                   <line key={`gh${i}`}
                     x1={0} y1={(i / 6) * H} x2={W} y2={(i / 6) * H}
-                    stroke="#1a3a5c" strokeWidth="0.4" strokeOpacity="0.4" />
+                    stroke="#0e2a40" strokeWidth="0.4" strokeOpacity="0.5" />
                 ))}
 
                 {/* Latitude labels */}
@@ -373,24 +655,26 @@ export default function GeoMap({ points = [], onClose }) {
                   const { y } = projectLL(lat, -175, W, H, MARGIN)
                   return (
                     <text key={lat} x={MARGIN + 2} y={y - 2}
-                      fontSize="7" fill="#1e4060" fontFamily="monospace">
+                      fontSize="7" fill="#1a3a55" fontFamily="monospace">
                       {lat}°
                     </text>
                   )
                 })}
 
-                {/* Real landmasses from Natural Earth TopoJSON */}
+                {/* Loading */}
                 {mapLoading && (
                   <text x={W / 2} y={H / 2} textAnchor="middle"
-                    fontSize="11" fill="#1e4060" fontFamily="monospace">
+                    fontSize="11" fill="#1a3a55" fontFamily="monospace">
                     loading map…
                   </text>
                 )}
+
+                {/* Land — slightly brighter fill to match screenshot's visible landmasses */}
                 {landPaths.map((d, i) => (
                   <path key={i} d={d}
-                    fill="#0e2035"
-                    stroke="#1e4060"
-                    strokeWidth="0.5"
+                    fill="#0e2438"
+                    stroke="#1a3a55"
+                    strokeWidth="0.6"
                     strokeLinejoin="round"
                   />
                 ))}
@@ -405,7 +689,7 @@ export default function GeoMap({ points = [], onClose }) {
                   return (
                     <text key={country} x={x} y={y - 14}
                       textAnchor="middle" fontSize="8"
-                      fill="var(--accent)" fillOpacity="0.55"
+                      fill="#00d4ff" fillOpacity="0.45"
                       fontFamily="monospace"
                       style={{ pointerEvents: 'none' }}>
                       {country} ×{pts.length}
@@ -413,14 +697,13 @@ export default function GeoMap({ points = [], onClose }) {
                   )
                 })}
 
-                {/* Host dots — radius divided by k so they're constant pixel-size at any zoom */}
+                {/* Host dots */}
                 {points.map((p) => {
                   const j = ipJitter(p.ip)
                   const { x, y } = projectLL(p.lat + j.dy, p.lon + j.dx, W, H, MARGIN)
                   const isHov = hovered  === p.ip
                   const isSel = selected === p.ip
-                  const color = isSel ? '#ffdd00' : isHov ? '#ffffff' : '#00ff88'
-                  // Scale dot radius inversely so it's always ~4–6px on screen
+                  const color = dotColor(p.ip)
                   const baseR  = (isHov || isSel ? 5.5 : 3.5) / transform.k
                   const ringR  = 10 / transform.k
                   const ringR2 = 16 / transform.k
@@ -436,20 +719,19 @@ export default function GeoMap({ points = [], onClose }) {
                       onMouseLeave={() => { setHovered(null); setTooltip(null) }}
                       onClick={() => setSelected(p.ip === selected ? null : p.ip)}
                     >
-                      {/* Pulse rings — only show when not too zoomed out (they'd overlap) */}
                       {transform.k > 2 && <>
                         <circle cx={x} cy={y} r={ringR}
                           fill="none" stroke={color} strokeWidth={sw}
-                          strokeOpacity="0.4"
-                          style={{ animation: 'none', opacity: 0.4 }} />
+                          strokeOpacity="0.35" />
                         <circle cx={x} cy={y} r={ringR2}
                           fill="none" stroke={color} strokeWidth={sw * 0.5}
-                          strokeOpacity="0.2" />
+                          strokeOpacity="0.15" />
                       </>}
                       <circle cx={x} cy={y}
                         r={baseR}
                         fill={color}
-                        fillOpacity={isHov || isSel ? 1 : 0.9}
+                        fillOpacity={isHov || isSel ? 1 : 0.85}
+                        filter={isHov || isSel ? 'url(#gm-glow)' : undefined}
                         style={{ transition: 'r 0.1s' }} />
                     </g>
                   )
@@ -467,7 +749,7 @@ export default function GeoMap({ points = [], onClose }) {
                 {tooltip.point.port && (
                   <div className="gm-tip-row">
                     <span className="gm-tip-label">PORT</span>
-                    <span style={{ color: 'var(--accent)' }}>{tooltip.point.port}</span>
+                    <span style={{ color: '#00d4ff' }}>{tooltip.point.port}</span>
                     {tooltip.point.software && (
                       <span className="gm-tip-soft">{tooltip.point.software}</span>
                     )}
@@ -475,12 +757,12 @@ export default function GeoMap({ points = [], onClose }) {
                 )}
                 <div className="gm-tip-row">
                   <span className="gm-tip-label">COUNTRY</span>
-                  <span>{countryFlag(tooltip.point.countryCode)} {tooltip.point.country || '—'}</span>
+                  <span style={{ color: '#8ab4cc' }}>{countryFlag(tooltip.point.countryCode)} {tooltip.point.country || '—'}</span>
                 </div>
                 {tooltip.point.city && (
                   <div className="gm-tip-row">
                     <span className="gm-tip-label">CITY</span>
-                    <span>{tooltip.point.city}</span>
+                    <span style={{ color: '#8ab4cc' }}>{tooltip.point.city}</span>
                   </div>
                 )}
                 {tooltip.point.isp && (
@@ -504,14 +786,14 @@ export default function GeoMap({ points = [], onClose }) {
               </div>
             )}
 
-            <p className="gm-hint mono">scroll to zoom · drag to pan · click pin to highlight</p>
+            <p className="gm-hint">scroll to zoom · drag to pan · click pin to highlight</p>
           </div>
 
           {/* Sidebar */}
           <div className="gm-sidebar">
             <div className="gm-sidebar-head">
-              <span className="mono" style={{ fontSize: '0.7rem', color: 'var(--accent)', letterSpacing: 2 }}>HOSTS</span>
-              <span className="mono" style={{ fontSize: '0.7rem', color: 'var(--dim)' }}>{points.length}</span>
+              <span style={{ fontSize: '0.6rem', color: '#00d4ff', letterSpacing: '0.12em', fontFamily: 'monospace' }}>HOSTS</span>
+              <span style={{ fontSize: '0.6rem', color: '#2a4a6a', fontFamily: 'monospace' }}>{points.length}</span>
             </div>
             <input
               className="gm-sidebar-search"
@@ -543,7 +825,7 @@ export default function GeoMap({ points = [], onClose }) {
                 </div>
               ))}
               {filteredPoints.length === 0 && (
-                <p style={{ padding: '12px', color: 'var(--dim)', fontSize: '0.75rem', fontFamily: 'monospace' }}>
+                <p style={{ padding: '12px', color: '#2a4a6a', fontSize: '0.65rem', fontFamily: 'monospace' }}>
                   no matches
                 </p>
               )}
@@ -552,6 +834,7 @@ export default function GeoMap({ points = [], onClose }) {
 
         </div>
       </div>
-    </div>
+      </div>
+    </>
   )
 }

@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
-import { TbArrowLeft, TbAlertTriangle, TbArrowUpRight, TbCamera } from 'react-icons/tb'
-import { fetchIpInfo, fetchHttpScreenshot } from '../api'
+import {
+  TbArrowLeft, TbAlertTriangle, TbArrowUpRight, TbCamera,
+  TbShieldCheck, TbShieldX, TbShieldOff, TbFileText, TbLock,
+} from 'react-icons/tb'
+import {
+  fetchIpInfo, fetchHttpScreenshot,
+  fetchTlsCert, fetchRobotsTxt, fetchSecurityTxt,
+} from '../api'
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
 
 function severityColor(score) {
   const n = parseFloat(score)
@@ -14,19 +22,235 @@ function severityColor(score) {
 
 function pivotLinks(ip) {
   return [
-    { href: 'https://www.shodan.io/host/' + ip,                label: 'Shodan' },
+    { href: 'https://www.shodan.io/host/'             + ip, label: 'Shodan'      },
     { href: 'https://www.virustotal.com/gui/ip-address/' + ip, label: 'VirusTotal' },
-    { href: 'https://bgp.he.net/ip/' + ip,                    label: 'BGP.he.net' },
-    { href: 'https://viz.greynoise.io/ip/' + ip,              label: 'GreyNoise' },
-    { href: 'https://www.abuseipdb.com/check/' + ip,          label: 'AbuseIPDB' },
-    { href: 'https://www.censys.io/hosts/' + ip,              label: 'Censys' },
+    { href: 'https://bgp.he.net/ip/'                  + ip, label: 'BGP.he.net'  },
+    { href: 'https://viz.greynoise.io/ip/'            + ip, label: 'GreyNoise'   },
+    { href: 'https://www.abuseipdb.com/check/'        + ip, label: 'AbuseIPDB'   },
+    { href: 'https://www.censys.io/hosts/'            + ip, label: 'Censys'      },
+    // ── crt.sh: search certificate transparency logs for this IP ────────
+    { href: 'https://crt.sh/?q='                      + encodeURIComponent(ip), label: 'crt.sh' },
   ]
 }
 
+// ── TLS expiry colour logic (shared with ScanConsole badge) ──────────────────
+export function tlsExpiryColor(daysLeft) {
+  if (daysLeft === null || daysLeft === undefined) return 'var(--dim)'
+  if (daysLeft < 0)   return 'var(--crit)'   // expired
+  if (daysLeft < 14)  return 'var(--high)'   // < 2 weeks
+  if (daysLeft < 30)  return 'var(--med)'    // < 1 month
+  return 'var(--low)'                         // healthy
+}
+
+// ── TLS section sub-component ─────────────────────────────────────────────────
+function TlsSection({ ip, port }) {
+  const [tls,     setTls]     = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error,   setError]   = useState('')
+
+  useEffect(() => {
+    setLoading(true)
+    setError('')
+    fetchTlsCert(ip, port)
+      .then(setTls)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [ip, port])
+
+  if (loading) return <p className="hint" style={{ marginTop: 8 }}>Fetching TLS cert…</p>
+  if (error)   return (
+    <p className="hint" style={{ marginTop: 8, color: 'var(--dim)' }}>
+      TLS: {error}
+    </p>
+  )
+  if (!tls || tls.error) return (
+    <p className="hint" style={{ marginTop: 8, color: 'var(--dim)' }}>
+      No TLS cert ({tls?.error || 'no response'})
+    </p>
+  )
+
+  const expiryColor = tlsExpiryColor(tls.days_left)
+  const StatusIcon  = tls.expired
+    ? TbShieldX
+    : tls.self_signed
+      ? TbShieldOff
+      : TbShieldCheck
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {/* Status row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <StatusIcon
+          size={15}
+          style={{ color: tls.expired ? 'var(--crit)' : tls.self_signed ? 'var(--med)' : 'var(--low)', flexShrink: 0 }}
+        />
+        <span className="mono" style={{ fontSize: '0.82rem', color: 'var(--text)' }}>
+          {tls.subject_cn || '(no CN)'}
+        </span>
+        {tls.self_signed && (
+          <span className="badge" style={{ color: 'var(--med)', borderColor: 'var(--med)', background: 'rgba(255,170,0,0.08)' }}>
+            SELF-SIGNED
+          </span>
+        )}
+        {tls.expired && (
+          <span className="badge" style={{ color: 'var(--crit)', borderColor: 'var(--crit)', background: 'rgba(255,50,50,0.08)' }}>
+            EXPIRED
+          </span>
+        )}
+      </div>
+
+      {/* Validity */}
+      <div className="ip-detail-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 0 }}>
+        <div className="ip-field">
+          <span className="ip-label">Issuer</span>
+          <span className="ip-value">{tls.issuer_cn || tls.issuer_org || '—'}</span>
+        </div>
+        <div className="ip-field">
+          <span className="ip-label">Expires</span>
+          <span className="ip-value mono" style={{ color: expiryColor }}>
+            {tls.not_after
+              ? `${tls.not_after.slice(0, 11).trim()} (${
+                  tls.days_left !== null
+                    ? tls.days_left < 0
+                      ? `${Math.abs(tls.days_left)}d ago`
+                      : `${tls.days_left}d left`
+                    : '?'
+                })`
+              : '—'}
+          </span>
+        </div>
+        <div className="ip-field">
+          <span className="ip-label">Valid From</span>
+          <span className="ip-value mono">{tls.not_before ? tls.not_before.slice(0, 11).trim() : '—'}</span>
+        </div>
+      </div>
+
+      {/* SANs */}
+      {tls.sans && tls.sans.length > 0 && (
+        <div className="ip-field">
+          <span className="ip-label">SANs ({tls.sans.length})</span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 4 }}>
+            {tls.sans.slice(0, 12).map(san => (
+              <span key={san} className="version-tag" style={{ fontFamily: 'var(--mono-font)', fontSize: '0.72rem' }}>
+                {san}
+              </span>
+            ))}
+            {tls.sans.length > 12 && (
+              <span className="hint" style={{ fontSize: '0.7rem' }}>+{tls.sans.length - 12} more</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* crt.sh link */}
+      <a
+        href={`https://crt.sh/?q=${encodeURIComponent(tls.subject_cn || ip)}`}
+        target="_blank"
+        rel="noreferrer"
+        className="ip-detail-link"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 2 }}
+      >
+        Search crt.sh for this cert <TbArrowUpRight size={12} aria-hidden />
+      </a>
+    </div>
+  )
+}
+
+// ── Recon text section (robots / security.txt) ────────────────────────────────
+function ReconTextSection({ ip, port, scheme }) {
+  const [robots,   setRobots]   = useState(null)
+  const [secTxt,   setSecTxt]   = useState(null)
+  const [loading,  setLoading]  = useState(true)
+  const [expanded, setExpanded] = useState({ robots: false, sec: false })
+
+  useEffect(() => {
+    setLoading(true)
+    Promise.allSettled([
+      fetchRobotsTxt({ ip, port, scheme }),
+      fetchSecurityTxt({ ip, port, scheme }),
+    ]).then(([r, s]) => {
+      setRobots(r.status === 'fulfilled' ? r.value : { found: false, error: r.reason?.message })
+      setSecTxt(s.status === 'fulfilled' ? s.value : { found: false, error: s.reason?.message })
+    }).finally(() => setLoading(false))
+  }, [ip, port, scheme])
+
+  if (loading) return <p className="hint" style={{ marginTop: 8 }}>Fetching recon files…</p>
+
+  const neitherFound = !robots?.found && !secTxt?.found
+  if (neitherFound) return (
+    <p className="hint" style={{ marginTop: 8, color: 'var(--dim)' }}>
+      Neither robots.txt nor security.txt found on this host.
+    </p>
+  )
+
+  const textareaStyle = {
+    fontFamily: 'var(--mono-font)',
+    fontSize: '0.75rem',
+    color: 'var(--text2)',
+    background: 'var(--bg3)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius)',
+    padding: '10px 12px',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    lineHeight: 1.55,
+    marginTop: 8,
+    maxHeight: 220,
+    overflowY: 'auto',
+  }
+
+  function FileBlock({ label, data, expandKey }) {
+    if (!data?.found) return (
+      <div>
+        <span className="ip-label">{label}</span>
+        <span className="hint" style={{ marginLeft: 8, fontSize: '0.72rem' }}>
+          {data?.error ? `error: ${data.error}` : `not found (HTTP ${data?.status ?? '—'})`}
+        </span>
+      </div>
+    )
+    const lines    = (data.content || '').split('\n')
+    const preview  = lines.slice(0, 8).join('\n')
+    const isLong   = lines.length > 8
+    const isOpen   = expanded[expandKey]
+
+    return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="ip-label">{label}</span>
+          <span className="badge" style={{ color: 'var(--low)', borderColor: 'var(--low)', background: 'rgba(100,220,100,0.07)' }}>
+            {lines.length} lines
+          </span>
+          {isLong && (
+            <button
+              className="ghost small"
+              style={{ padding: '1px 8px', fontSize: '0.67rem' }}
+              onClick={() => setExpanded(e => ({ ...e, [expandKey]: !e[expandKey] }))}
+            >
+              {isOpen ? 'collapse' : 'expand all'}
+            </button>
+          )}
+        </div>
+        <pre style={textareaStyle}>
+          {isOpen ? data.content : preview}
+          {isLong && !isOpen && '\n…'}
+        </pre>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <FileBlock label="robots.txt"    data={robots} expandKey="robots" />
+      <FileBlock label="security.txt"  data={secTxt} expandKey="sec"    />
+    </div>
+  )
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
 export default function IpDetail() {
-  const { ip } = useParams()
-  const location = useLocation()
-  const navigate = useNavigate()
+  const { ip }     = useParams()
+  const location   = useLocation()
+  const navigate   = useNavigate()
 
   const [hitData, setHitData] = useState(location.state?.hit || null)
 
@@ -39,11 +263,7 @@ export default function IpDetail() {
         if (key && key.startsWith('hit_' + ip + '_')) {
           try {
             const parsed = JSON.parse(localStorage.getItem(key))
-            if (parsed) {
-              setHitData(parsed)
-              clearInterval(poll)
-              return
-            }
+            if (parsed) { setHitData(parsed); clearInterval(poll); return }
           } catch { /* ignore */ }
         }
       }
@@ -66,15 +286,23 @@ export default function IpDetail() {
     setGeoLoading(true)
     setGeoError('')
     fetchIpInfo(ip)
-      .then((data) => {
+      .then(data => {
         if (data.status === 'fail') setGeoError(data.message || 'Lookup failed')
         else setGeo(data)
       })
-      .catch((err) => setGeoError(err.message))
+      .catch(err => setGeoError(err.message))
       .finally(() => setGeoLoading(false))
   }, [ip])
 
-  const canScreenshot = hitData && [80, 443, 8080, 8443, 8000, 8008, 8888, 3000, 5000].includes(hitData.port)
+  const tlsPorts   = hitData ? [443, 8443].filter(p => p === hitData.port) : []
+  const isTlsPort  = hitData && [443, 8443].includes(hitData.port)
+
+  // Determine scheme for recon text fetch
+  const httpPort   = hitData?.port
+  const httpScheme = [443, 8443].includes(httpPort) ? 'https' : 'http'
+  const isHttpPort = hitData && [80, 443, 8080, 8443, 8000, 8008, 8888, 3000, 5000].includes(httpPort)
+
+  const canScreenshot = isHttpPort
 
   const grabScreenshot = async () => {
     if (!canScreenshot) return
@@ -82,7 +310,7 @@ export default function IpDetail() {
     setShotError('')
     try {
       const scheme = [443, 8443].includes(hitData.port) ? 'https' : 'http'
-      const data = await fetchHttpScreenshot({ ip, port: hitData.port, scheme, full_page: false })
+      const data   = await fetchHttpScreenshot({ ip, port: hitData.port, scheme, full_page: false })
       if (data.error) throw new Error(data.error)
       setShot({ ...data, scheme })
     } catch (e) {
@@ -127,7 +355,7 @@ export default function IpDetail() {
             letterSpacing: '0.18em',
             textTransform: 'uppercase',
             marginTop: 4,
-            marginBottom: 8
+            marginBottom: 8,
           }}>
             IP Intelligence
           </p>
@@ -222,6 +450,17 @@ export default function IpDetail() {
           </div>
         )}
 
+        {/* ── TLS Certificate (auto-shown for port 443 / 8443) ── */}
+        {isTlsPort && (
+          <div className="ip-section">
+            <p className="ip-section-title">
+              <TbLock size={11} style={{ marginRight: 5 }} aria-hidden />
+              TLS Certificate — port {hitData.port}
+            </p>
+            <TlsSection ip={ip} port={hitData.port} />
+          </div>
+        )}
+
         {/* ── Detected software ── */}
         {hitData && hitData.version_info && hitData.version_info.length > 0 && (
           <div className="ip-section">
@@ -262,6 +501,17 @@ export default function IpDetail() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* ── robots.txt + security.txt (HTTP ports) ── */}
+        {isHttpPort && (
+          <div className="ip-section">
+            <p className="ip-section-title">
+              <TbFileText size={11} style={{ marginRight: 5 }} aria-hidden />
+              Recon Files
+            </p>
+            <ReconTextSection ip={ip} port={httpPort} scheme={httpScheme} />
           </div>
         )}
 

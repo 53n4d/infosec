@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   TbAlertTriangle,
@@ -16,9 +16,10 @@ import {
   TbWorld,
   TbX,
 } from 'react-icons/tb'
-import { startScan, streamScanJob, fetchCountries, fetchIpInfo } from '../api'
+import { startScan, streamScanJob, fetchCountries, fetchIpInfo, fetchTlsCert } from '../api'
 import { contributeCountryIntel } from '../intel'
 import GeoMap from './GeoMap'
+import { tlsExpiryColor } from './IpDetail'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -110,6 +111,90 @@ function countryFlag(code) {
   const offset = 0x1F1E6 - 65
   return String.fromCodePoint(code.toUpperCase().charCodeAt(0) + offset) +
          String.fromCodePoint(code.toUpperCase().charCodeAt(1) + offset)
+}
+
+// Cache TLS results in a module-level map so we only fetch once per IP:port.
+const _tlsCache = {}
+
+function useTlsBadge(ip, port) {
+  const TLS_PORTS = [443, 8443]
+  const [info, setInfo] = React.useState(null)   // { days_left, expired, self_signed }
+
+  React.useEffect(() => {
+    if (!TLS_PORTS.includes(port)) return
+    const key = `${ip}:${port}`
+    if (_tlsCache[key]) { setInfo(_tlsCache[key]); return }
+    fetchTlsCert(ip, port)
+      .then(d => {
+        const cached = { days_left: d.days_left, expired: d.expired, self_signed: d.self_signed, error: d.error }
+        _tlsCache[key] = cached
+        setInfo(cached)
+      })
+      .catch(() => {})
+  }, [ip, port])
+
+  return info
+}
+
+function PortChipWithTls({ hit, ip, hasData }) {
+  const tls = useTlsBadge(ip, hit.port)
+
+  // TLS badge label
+  let tlsBadge = null
+  if (tls && !tls.error) {
+    const color = tlsExpiryColor(tls.days_left)
+    const label = tls.expired
+      ? 'EXP'
+      : tls.self_signed
+        ? 'SELF'
+        : tls.days_left !== null
+          ? `${tls.days_left}d`
+          : 'TLS'
+    const title = tls.expired
+      ? 'TLS cert expired'
+      : tls.self_signed
+        ? 'Self-signed cert'
+        : tls.days_left !== null
+          ? `TLS cert expires in ${tls.days_left} days`
+          : 'TLS cert found'
+
+    tlsBadge = (
+      <span
+        title={title}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          marginLeft: 3,
+          fontFamily: 'var(--mono-font)',
+          fontSize: '0.58rem',
+          fontWeight: 700,
+          color,
+          background: `${color}18`,
+          border: `1px solid ${color}55`,
+          borderRadius: 2,
+          padding: '0px 4px',
+          letterSpacing: '0.04em',
+          lineHeight: 1.5,
+        }}
+      >
+        {label}
+      </span>
+    )
+  }
+
+  return (
+    <span
+      className={`port-chip ${hasData ? 'port-chip-hit' : ''}`}
+      title={hit.software || (hit.banner ? hit.banner.slice(0, 60) : '')}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 0 }}
+    >
+      :{hit.port}
+      {hit.software && (
+        <span className="port-chip-svc"> {hit.software.split('/')[0].slice(0, 12)}</span>
+      )}
+      {tlsBadge}
+    </span>
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -303,6 +388,15 @@ export default function ScanConsole() {
     // Don't reconnect if job is already finished
     if (['done', 'stopped', 'error'].includes(savedStatus)) {
       setJobStatus(savedStatus)
+      // Load hits that were saved during this scan
+      const restoredHits = []
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i)
+        if (k && k.startsWith('hit_' + urlJobId + '_')) {
+          try { restoredHits.push(JSON.parse(localStorage.getItem(k))) } catch { /* skip */ }
+        }
+      }
+      if (restoredHits.length > 0) setHits(restoredHits)
       return
     }
 
@@ -318,7 +412,7 @@ export default function ScanConsole() {
           const hit = event.hit
           setHits(prev => [...prev, hit])
           if (hit.ip && hit.port)
-            localStorage.setItem('hit_' + hit.ip + '_' + hit.port, JSON.stringify(hit))
+            localStorage.setItem('hit_' + urlJobId + '_' + hit.ip + '_' + hit.port, JSON.stringify(hit))
         } else if (event.type === 'stats') {
           setStats({ probed: event.probed, responsive: event.responsive, vuln_hosts: event.vuln_hosts })
           setJobStatus(event.status)
@@ -906,16 +1000,12 @@ export default function ScanConsole() {
                           : ports.map((p, pi) => {
                               const hasData = !!(p.banner || p.software || p.cves?.length)
                               return (
-                                <span
+                                <PortChipWithTls
                                   key={pi}
-                                  className={`port-chip ${hasData ? 'port-chip-hit' : ''}`}
-                                  title={p.software || (p.banner ? p.banner.slice(0, 60) : '')}
-                                >
-                                  :{p.port}
-                                  {p.software && (
-                                    <span className="port-chip-svc"> {p.software.split('/')[0].slice(0, 12)}</span>
-                                  )}
-                                </span>
+                                  hit={p}
+                                  ip={ip}
+                                  hasData={hasData}
+                                />
                               )
                             })
                         }
